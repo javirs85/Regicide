@@ -26,6 +26,10 @@ const drawFlightDurationMs = 460;
 const drawFlightWindowMs = 1120;
 const drawRevealMs = 150;
 const drawLandingOverlapMs = 110;
+const clubsStampDurationMs = 620;
+const clubsStampDelayMs = 140;
+const spadesShieldAnimationMs = 900;
+const damageBubbleAnimationMs = 820;
 const phaseAnimationMs = 520;
 const debugDiscardSeedCount = 10;
 
@@ -48,17 +52,30 @@ type FlyingDrawCard = {
   toY: number;
 };
 
+type ClubsStamp = {
+  id: string;
+  delayMs: number;
+  x: number;
+  y: number;
+};
+
+type ShieldPulse = {
+  id: string;
+  amount: number;
+};
+
 type CardViewProps = {
   card: Card;
   className?: string;
   isDimmed?: boolean;
+  isDoubled?: boolean;
   isSelected?: boolean;
   onClick?: () => void;
   style?: CSSProperties;
 };
 
 const CardView = forwardRef<HTMLButtonElement, CardViewProps>(function CardView(
-  { card, className = '', isDimmed = false, isSelected = false, onClick, style },
+  { card, className = '', isDimmed = false, isDoubled = false, isSelected = false, onClick, style },
   ref,
 ) {
   const suitClass = card.suit === 'none' ? 'none' : card.suit;
@@ -81,6 +98,7 @@ const CardView = forwardRef<HTMLButtonElement, CardViewProps>(function CardView(
         <span>{rankLabels[card.rank]}</span>
         <small>{suitSymbol}</small>
       </span>
+      {isDoubled ? <span className="card-double-badge">x2</span> : null}
     </button>
   );
 });
@@ -158,6 +176,7 @@ export function App() {
   const initialHand = gameState.players[gameState.currentPlayerIndex].hand as Array<Card | undefined>;
   const initialDebugDiscard = gameState.tavernDeck.slice(0, debugDiscardSeedCount);
   const initialTavernDeck = gameState.tavernDeck.slice(debugDiscardSeedCount);
+  const enemy = gameState.currentEnemy;
   const [handCards, setHandCards] = useState<Array<Card | undefined>>(initialHand);
   const [playedCards, setPlayedCards] = useState<Card[]>(gameState.playedAgainstCurrentEnemy);
   const [tavernDeck, setTavernDeck] = useState<Card[]>(initialTavernDeck);
@@ -170,11 +189,16 @@ export function App() {
   const [shufflingPile, setShufflingPile] = useState<PileName | null>(null);
   const [flyingHealCards, setFlyingHealCards] = useState<FlyingHealCard[]>([]);
   const [flyingDrawCards, setFlyingDrawCards] = useState<FlyingDrawCard[]>([]);
+  const [clubsStamps, setClubsStamps] = useState<ClubsStamp[]>([]);
+  const [doubledCardIds, setDoubledCardIds] = useState<Set<string>>(() => new Set());
+  const [spadesShieldTotal, setSpadesShieldTotal] = useState(gameState.spadesShieldTotalPlayedAgainstEnemy);
+  const [enemyDamageTaken, setEnemyDamageTaken] = useState(enemy.damageTaken);
+  const [isDamageAnimating, setIsDamageAnimating] = useState(false);
+  const [shieldPulse, setShieldPulse] = useState<ShieldPulse | null>(null);
   const [drawingCardIds, setDrawingCardIds] = useState<Set<string>>(() => new Set());
   const [isResolving, setIsResolving] = useState(false);
-  const enemy = gameState.currentEnemy;
   const enemyCard = enemy.card;
-  const enemyHealthRemaining = enemy.health - enemy.damageTaken;
+  const enemyHealthRemaining = enemy.health - enemyDamageTaken;
   const defeatedSuits = getDefeatedSuitsForCurrentTier(gameState);
   const topDiscard = discardPile.at(-1);
   const hasSelectedCards = selectedCardIds.size > 0;
@@ -291,6 +315,11 @@ export function App() {
     await sleep(phaseAnimationMs);
     await resolveHeartPower(selectedCards);
     await resolveDiamondPower(selectedCards, handAfterPlay);
+    await resolveClubsPower(selectedCards);
+    await resolveSpadesPower(selectedCards);
+    setTurnPhase('resolvingDamage');
+    await sleep(phaseAnimationMs);
+    await resolveDamage(selectedCards);
     setIsResolving(false);
   }
 
@@ -357,6 +386,52 @@ export function App() {
     setActivePower(null);
   }
 
+  async function resolveClubsPower(cards: Card[]) {
+    const suitsInPlay = playedSuits(cards);
+    const clubsPowerActive = suitsInPlay.has('clubs') && (enemyCard.suit !== 'clubs' || gameState.enemyImmunityCancelled);
+
+    if (!clubsPowerActive) return;
+
+    setActivePower('clubs');
+    await sleep(powerAnimationMs);
+    const clubsCards = cards.filter((card) => card.suit === 'clubs');
+    await animateClubsStamps(clubsCards);
+    setDoubledCardIds((current) => {
+      const next = new Set(current);
+      clubsCards.forEach((card) => next.add(card.id));
+      return next;
+    });
+    setActivePower(null);
+  }
+
+  async function resolveSpadesPower(cards: Card[]) {
+    const suitsInPlay = playedSuits(cards);
+    const spadesPowerActive = suitsInPlay.has('spades') && (enemyCard.suit !== 'spades' || gameState.enemyImmunityCancelled);
+
+    if (!spadesPowerActive) return;
+
+    const shieldAmount = attackValue(cards);
+
+    setActivePower('spades');
+    await sleep(powerAnimationMs);
+    setShieldPulse({ id: `shield-pulse-${Date.now()}`, amount: shieldAmount });
+    await sleep(360);
+    setSpadesShieldTotal((current) => current + shieldAmount);
+    await sleep(spadesShieldAnimationMs - 360);
+    setShieldPulse(null);
+    setActivePower(null);
+  }
+
+  async function resolveDamage(cards: Card[]) {
+    const damage = calculateDamage(cards);
+
+    setIsDamageAnimating(true);
+    await sleep(Math.floor(damageBubbleAnimationMs * 0.42));
+    setEnemyDamageTaken((current) => current + damage);
+    await sleep(Math.ceil(damageBubbleAnimationMs * 0.58));
+    setIsDamageAnimating(false);
+  }
+
   async function runPileShuffle(pile: PileName) {
     setShufflingPile(pile);
     await sleep(shuffleAnimationMs);
@@ -421,6 +496,26 @@ export function App() {
     };
   }
 
+  async function animateClubsStamps(cards: Card[]) {
+    const stamps = cards.flatMap((card, index) => {
+      const rect = cardRefs.current.get(card.id)?.getBoundingClientRect();
+      if (!rect) return [];
+
+      return {
+        id: `clubs-stamp-${card.id}`,
+        delayMs: index * clubsStampDelayMs,
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      };
+    });
+
+    if (stamps.length === 0) return;
+
+    setClubsStamps(stamps);
+    await sleep(clubsStampDurationMs + clubsStampDelayMs * (stamps.length - 1) + 100);
+    setClubsStamps([]);
+  }
+
   return (
     <main className="game-shell">
       {toastMessage ? <div className="toast">{toastMessage}</div> : null}
@@ -455,6 +550,21 @@ export function App() {
           }
         />
       ))}
+      {clubsStamps.map((stamp) => (
+        <div
+          className="clubs-stamp"
+          key={stamp.id}
+          style={
+            {
+              '--delay': `${stamp.delayMs}ms`,
+              '--stamp-x': `${stamp.x}px`,
+              '--stamp-y': `${stamp.y}px`,
+            } as CSSProperties
+          }
+        >
+          x2
+        </div>
+      ))}
 
       <section className="board-grid">
         <section className="phase-track" aria-label="Turn steps">
@@ -484,7 +594,12 @@ export function App() {
 
           <div className="shield-meter" aria-label="Current defensive bonus">
             <Shield size={72} strokeWidth={1.7} />
-            <strong>{gameState.spadesShieldTotalPlayedAgainstEnemy}</strong>
+            <strong className={shieldPulse ? 'is-charging' : ''}>{spadesShieldTotal}</strong>
+            {shieldPulse ? (
+              <span className="shield-gain" key={shieldPulse.id}>
+                +{shieldPulse.amount}
+              </span>
+            ) : null}
           </div>
         </aside>
 
@@ -513,9 +628,9 @@ export function App() {
                 <Shield size={16} />
                 {enemyHealthRemaining}
               </span>
-              <span>
+              <span className={isDamageAnimating ? 'damage-bubble is-damage-animating' : 'damage-bubble'}>
                 <Skull size={16} />
-                {enemy.damageTaken}
+                {enemyDamageTaken}
               </span>
               <span>
                 <Swords size={16} />
@@ -534,7 +649,9 @@ export function App() {
           {playedCards.length === 0 ? (
             <span className="pool-empty">Cartas jugadas contra el enemigo</span>
           ) : (
-            playedCards.map((card) => <CardView card={card} className="played-card" key={card.id} ref={setCardRef(card.id)} />)
+            playedCards.map((card) => (
+              <CardView card={card} className="played-card" isDoubled={doubledCardIds.has(card.id)} key={card.id} ref={setCardRef(card.id)} />
+            ))
           )}
         </div>
       </section>
@@ -586,6 +703,13 @@ export function App() {
       </section>
     </main>
   );
+}
+
+function calculateDamage(cards: Card[]) {
+  const baseDamage = attackValue(cards);
+  const hasActiveClubs = cards.some((card) => card.suit === 'clubs');
+
+  return hasActiveClubs ? baseDamage * 2 : baseDamage;
 }
 
 function compactHand(cards: Array<Card | undefined>) {
