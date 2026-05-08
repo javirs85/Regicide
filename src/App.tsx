@@ -1,4 +1,4 @@
-import { forwardRef, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Shield, Skull, Swords } from 'lucide-react';
 import {
   rankLabels,
@@ -6,7 +6,10 @@ import {
   suitSymbols,
   suits,
   type Card,
+  type Suit,
 } from './game/cards';
+import { shuffleDeck } from './game/decks';
+import { validateCardSelection } from './game/playValidation';
 import { createInitialGameState, getDefeatedSuitsForCurrentTier } from './game/state';
 
 const turnSteps = [
@@ -16,16 +19,46 @@ const turnSteps = [
   { phase: 'awaitingDamageDiscard', label: '4. Ataque enemigo' },
 ] as const;
 
+const powerAnimationMs = 520;
+const shuffleAnimationMs = 620;
+const healFlightMs = 720;
+const drawFlightDurationMs = 460;
+const drawFlightWindowMs = 1120;
+const drawRevealMs = 150;
+const drawLandingOverlapMs = 110;
+const phaseAnimationMs = 520;
+const debugDiscardSeedCount = 10;
+
+type PileName = 'tavern' | 'discard';
+type FlyingHealCard = {
+  id: string;
+  delayMs: number;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+};
+
+type FlyingDrawCard = {
+  card: Card;
+  delayMs: number;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+};
+
 type CardViewProps = {
   card: Card;
   className?: string;
   isDimmed?: boolean;
   isSelected?: boolean;
   onClick?: () => void;
+  style?: CSSProperties;
 };
 
 const CardView = forwardRef<HTMLButtonElement, CardViewProps>(function CardView(
-  { card, className = '', isDimmed = false, isSelected = false, onClick },
+  { card, className = '', isDimmed = false, isSelected = false, onClick, style },
   ref,
 ) {
   const suitClass = card.suit === 'none' ? 'none' : card.suit;
@@ -36,6 +69,7 @@ const CardView = forwardRef<HTMLButtonElement, CardViewProps>(function CardView(
       className={`playing-card ${suitClass} ${isSelected ? 'selected' : ''} ${isDimmed ? 'dimmed' : ''} ${className}`}
       onClick={onClick}
       ref={ref}
+      style={style}
       type="button"
     >
       <span className="card-corner">
@@ -55,19 +89,38 @@ function EmptyHandSlot() {
   return <div className="card-slot" aria-label="Empty hand slot" />;
 }
 
-function TavernPile({ count }: { count: number }) {
+function HandSlot({
+  children,
+  index,
+  setSlotRef,
+}: {
+  children: ReactNode;
+  index: number;
+  setSlotRef: (index: number) => (element: HTMLDivElement | null) => void;
+}) {
   return (
-    <div className="pile-card tavern-pile" aria-label="Tavern deck">
-      <span>Taberna</span>
-      <strong>{count}</strong>
+    <div className="hand-slot" ref={setSlotRef(index)}>
+      {children}
     </div>
   );
 }
 
-function DiscardPile({ topCard, count }: { topCard?: Card; count: number }) {
+const TavernPile = forwardRef<HTMLDivElement, { count: number }>(function TavernPile({ count }, ref) {
+  return (
+    <div className="pile-card tavern-pile" aria-label="Tavern deck" ref={ref}>
+      <span>Taberna</span>
+      <strong>{count}</strong>
+    </div>
+  );
+});
+
+const DiscardPile = forwardRef<HTMLDivElement, { isShuffling: boolean; topCard?: Card; count: number }>(function DiscardPile(
+  { isShuffling, topCard, count },
+  ref,
+) {
   if (!topCard) {
     return (
-      <div className="pile-card discard-pile empty" aria-label="Discard pile">
+      <div className={`pile-card discard-pile empty ${isShuffling ? 'is-shuffling' : ''}`} aria-label="Discard pile" ref={ref}>
         <span>Descar.</span>
         <strong>{count}</strong>
       </div>
@@ -75,27 +128,61 @@ function DiscardPile({ topCard, count }: { topCard?: Card; count: number }) {
   }
 
   return (
-    <div className="discard-wrapper" aria-label="Discard pile">
+    <div className={`discard-wrapper ${isShuffling ? 'is-shuffling' : ''}`} aria-label="Discard pile" ref={ref}>
       <CardView card={topCard} className="discard-card" />
       <strong>{count}</strong>
     </div>
   );
+});
+
+function playedDensityClass(cardCount: number) {
+  if (cardCount >= 8) return 'density-tight';
+  if (cardCount >= 5) return 'density-medium';
+  return 'density-loose';
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function attackValue(cards: Card[]) {
+  return cards.reduce((sum, card) => sum + card.value, 0);
+}
+
+function playedSuits(cards: Card[]) {
+  return new Set(cards.map((card) => card.suit).filter((suit): suit is Suit => suit !== 'none'));
 }
 
 export function App() {
   const gameState = useMemo(() => createInitialGameState(1), []);
-  const initialHand = gameState.players[gameState.currentPlayerIndex].hand;
-  const [handCards, setHandCards] = useState<Card[]>(initialHand);
+  const initialHand = gameState.players[gameState.currentPlayerIndex].hand as Array<Card | undefined>;
+  const initialDebugDiscard = gameState.tavernDeck.slice(0, debugDiscardSeedCount);
+  const initialTavernDeck = gameState.tavernDeck.slice(debugDiscardSeedCount);
+  const [handCards, setHandCards] = useState<Array<Card | undefined>>(initialHand);
   const [playedCards, setPlayedCards] = useState<Card[]>(gameState.playedAgainstCurrentEnemy);
+  const [tavernDeck, setTavernDeck] = useState<Card[]>(initialTavernDeck);
+  const [discardPile, setDiscardPile] = useState<Card[]>(initialDebugDiscard);
+  const [turnPhase, setTurnPhase] = useState(gameState.turnPhase);
   const [selectedCardIds, setSelectedCardIds] = useState<Set<string>>(() => new Set());
+  const [rejectedCardId, setRejectedCardId] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [activePower, setActivePower] = useState<Suit | null>(null);
+  const [shufflingPile, setShufflingPile] = useState<PileName | null>(null);
+  const [flyingHealCards, setFlyingHealCards] = useState<FlyingHealCard[]>([]);
+  const [flyingDrawCards, setFlyingDrawCards] = useState<FlyingDrawCard[]>([]);
+  const [drawingCardIds, setDrawingCardIds] = useState<Set<string>>(() => new Set());
+  const [isResolving, setIsResolving] = useState(false);
   const enemy = gameState.currentEnemy;
   const enemyCard = enemy.card;
   const enemyHealthRemaining = enemy.health - enemy.damageTaken;
   const defeatedSuits = getDefeatedSuitsForCurrentTier(gameState);
-  const topDiscard = gameState.discardPile.at(-1);
+  const topDiscard = discardPile.at(-1);
   const hasSelectedCards = selectedCardIds.size > 0;
   const cardRefs = useRef(new Map<string, HTMLButtonElement>());
+  const handSlotRefs = useRef(new Map<number, HTMLDivElement>());
   const pendingFlightRects = useRef(new Map<string, DOMRect>());
+  const tavernPileRef = useRef<HTMLDivElement | null>(null);
+  const discardPileRef = useRef<HTMLDivElement | null>(null);
 
   useLayoutEffect(() => {
     if (pendingFlightRects.current.size === 0) return;
@@ -132,16 +219,38 @@ export function App() {
     });
   }, [playedCards]);
 
-  function toggleSelectedCard(cardId: string) {
+  function rejectCardSelection(cardId: string, reason: string) {
+    setRejectedCardId(cardId);
+    setToastMessage(reason);
+    window.setTimeout(() => setRejectedCardId((current) => (current === cardId ? null : current)), 420);
+    window.setTimeout(() => setToastMessage((current) => (current === reason ? null : current)), 2400);
+  }
+
+  function toggleSelectedCard(card: Card) {
+    if (isResolving) return;
+
+    const cardId = card.id;
+
     setSelectedCardIds((current) => {
       const next = new Set(current);
 
       if (next.has(cardId)) {
         next.delete(cardId);
-      } else {
-        next.add(cardId);
+        return next;
       }
 
+      const candidateCards = handCards.filter((handCard): handCard is Card => {
+        if (!handCard) return false;
+        return next.has(handCard.id) || handCard.id === cardId;
+      });
+      const validation = validateCardSelection(candidateCards);
+
+      if (!validation.isValid) {
+        rejectCardSelection(cardId, validation.reason);
+        return current;
+      }
+
+      next.add(cardId);
       return next;
     });
   }
@@ -156,10 +265,14 @@ export function App() {
     };
   }
 
-  function playSelectedCards() {
-    if (selectedCardIds.size === 0) return;
+  async function playSelectedCards() {
+    if (selectedCardIds.size === 0 || isResolving) return;
+    setIsResolving(true);
 
-    const selectedCards = handCards.filter((card) => selectedCardIds.has(card.id));
+    const selectedCards = handCards.filter((card): card is Card => {
+      if (!card) return false;
+      return selectedCardIds.has(card.id);
+    });
 
     selectedCards.forEach((card) => {
       const element = cardRefs.current.get(card.id);
@@ -167,17 +280,186 @@ export function App() {
       pendingFlightRects.current.set(card.id, element.getBoundingClientRect());
     });
 
-    setHandCards((cards) => cards.filter((card) => !selectedCardIds.has(card.id)));
+    const handAfterPlay = compactHand(handCards.filter((card) => !card || !selectedCardIds.has(card.id)));
+
+    setHandCards(handAfterPlay);
     setPlayedCards((cards) => [...cards, ...selectedCards]);
     setSelectedCardIds(new Set());
+
+    await sleep(460);
+    setTurnPhase('resolvingSuitPowers');
+    await sleep(phaseAnimationMs);
+    await resolveHeartPower(selectedCards);
+    await resolveDiamondPower(selectedCards, handAfterPlay);
+    setIsResolving(false);
+  }
+
+  async function resolveHeartPower(cards: Card[]) {
+    const suitsInPlay = playedSuits(cards);
+    const heartsPowerActive = suitsInPlay.has('hearts') && (enemyCard.suit !== 'hearts' || gameState.enemyImmunityCancelled);
+
+    if (!heartsPowerActive) return;
+
+    setActivePower('hearts');
+    await sleep(powerAnimationMs);
+
+    const healCount = Math.min(attackValue(cards), discardPile.length);
+
+    if (healCount > 0) {
+      await runPileShuffle('discard');
+      await animateHealCards(healCount);
+
+      const shuffledDiscard = shuffleDeck(discardPile);
+      const healedCards = shuffledDiscard.slice(0, healCount);
+      const remainingDiscard = shuffledDiscard.slice(healCount);
+
+      setDiscardPile(remainingDiscard);
+      setTavernDeck((cardsInDeck) => [...cardsInDeck, ...healedCards]);
+    }
+
+    setActivePower(null);
+  }
+
+  async function resolveDiamondPower(cards: Card[], currentHand: Array<Card | undefined>) {
+    const suitsInPlay = playedSuits(cards);
+    const diamondsPowerActive = suitsInPlay.has('diamonds') && (enemyCard.suit !== 'diamonds' || gameState.enemyImmunityCancelled);
+
+    if (!diamondsPowerActive) return;
+
+    setActivePower('diamonds');
+    await sleep(powerAnimationMs);
+
+    const emptySlots = Array.from({ length: gameState.players[gameState.currentPlayerIndex].maxHandSize }, (_, index) => index).filter((index) => !currentHand[index]);
+    const drawCount = Math.min(attackValue(cards), emptySlots.length, tavernDeck.length);
+
+    if (drawCount > 0) {
+      const drawnCards = tavernDeck.slice(0, drawCount);
+      const targetSlots = emptySlots.slice(0, drawCount);
+
+      setDrawingCardIds(new Set(drawnCards.map((card) => card.id)));
+      setHandCards(() => {
+        const next = [...currentHand];
+
+        drawnCards.forEach((card, cardIndex) => {
+          next[targetSlots[cardIndex]] = card;
+        });
+
+        return next;
+      });
+      await sleep(40);
+      const drawAnimationMs = animateDrawCards(drawnCards, targetSlots);
+      await sleep(drawAnimationMs - drawLandingOverlapMs);
+      setDrawingCardIds(new Set());
+      await sleep(drawLandingOverlapMs);
+      setTavernDeck((cardsInDeck) => cardsInDeck.slice(drawCount));
+    }
+
+    setActivePower(null);
+  }
+
+  async function runPileShuffle(pile: PileName) {
+    setShufflingPile(pile);
+    await sleep(shuffleAnimationMs);
+    setShufflingPile(null);
+  }
+
+  async function animateHealCards(count: number) {
+    const fromRect = discardPileRef.current?.getBoundingClientRect();
+    const toRect = tavernPileRef.current?.getBoundingClientRect();
+
+    if (!fromRect || !toRect) return;
+
+    const flights = Array.from({ length: count }, (_, index) => ({
+      id: `heal-flight-${Date.now()}-${index}`,
+      delayMs: index * 70,
+      fromX: fromRect.left + fromRect.width / 2,
+      fromY: fromRect.top + fromRect.height / 2,
+      toX: toRect.left + toRect.width / 2,
+      toY: toRect.top + toRect.height / 2,
+    }));
+
+    setFlyingHealCards(flights);
+    await sleep(healFlightMs + count * 70);
+    setFlyingHealCards([]);
+  }
+
+  function animateDrawCards(cards: Card[], targetSlots: number[]) {
+    const fromRect = tavernPileRef.current?.getBoundingClientRect();
+
+    if (!fromRect) return drawRevealMs + drawFlightDurationMs;
+
+    const maxDelay = Math.max(0, drawFlightWindowMs - drawFlightDurationMs);
+    const delayStep = cards.length <= 1 ? 0 : Math.min(115, maxDelay / (cards.length - 1));
+    const flights = cards.flatMap((card, index) => {
+      const toRect = handSlotRefs.current.get(targetSlots[index])?.getBoundingClientRect();
+      if (!toRect) return [];
+
+      return {
+        card,
+        delayMs: drawRevealMs + index * delayStep,
+        fromX: fromRect.left + fromRect.width / 2,
+        fromY: fromRect.top + fromRect.height / 2,
+        toX: toRect.left + toRect.width / 2,
+        toY: toRect.top + toRect.height / 2,
+      };
+    });
+
+    setFlyingDrawCards(flights);
+    const totalDuration = drawRevealMs + drawFlightDurationMs + delayStep * Math.max(0, cards.length - 1) + 80;
+    window.setTimeout(() => setFlyingDrawCards([]), totalDuration);
+
+    return totalDuration;
+  }
+
+  function setHandSlotRef(index: number) {
+    return (element: HTMLDivElement | null) => {
+      if (element) {
+        handSlotRefs.current.set(index, element);
+      } else {
+        handSlotRefs.current.delete(index);
+      }
+    };
   }
 
   return (
     <main className="game-shell">
+      {toastMessage ? <div className="toast">{toastMessage}</div> : null}
+      {flyingHealCards.map((flight) => (
+        <div
+          className="heal-flight-card"
+          key={flight.id}
+          style={
+            {
+              '--delay': `${flight.delayMs}ms`,
+              '--from-x': `${flight.fromX}px`,
+              '--from-y': `${flight.fromY}px`,
+              '--to-x': `${flight.toX}px`,
+              '--to-y': `${flight.toY}px`,
+            } as CSSProperties
+          }
+        />
+      ))}
+      {flyingDrawCards.map((flight) => (
+        <CardView
+          card={flight.card}
+          className="draw-flight-card"
+          key={flight.card.id}
+          style={
+            {
+              '--delay': `${flight.delayMs}ms`,
+              '--from-x': `${flight.fromX}px`,
+              '--from-y': `${flight.fromY}px`,
+              '--to-x': `${flight.toX}px`,
+              '--to-y': `${flight.toY}px`,
+            } as CSSProperties
+          }
+        />
+      ))}
+
       <section className="board-grid">
         <section className="phase-track" aria-label="Turn steps">
           {turnSteps.map((step) => (
-            <span className={gameState.turnPhase === step.phase ? 'active' : ''} key={step.phase}>
+            <span className={turnPhase === step.phase ? 'active' : ''} key={step.phase}>
               {step.label}
             </span>
           ))}
@@ -187,7 +469,12 @@ export function App() {
           <section className="power-panel" aria-label="Suit powers">
             <div className="power-list">
               {suits.map((suit) => (
-                <p className={enemyCard.suit === suit && !gameState.enemyImmunityCancelled ? 'blocked' : ''} key={suit}>
+                <p
+                  className={`${enemyCard.suit === suit && !gameState.enemyImmunityCancelled ? 'blocked' : ''} ${
+                    activePower === suit ? 'active-power' : ''
+                  }`}
+                  key={suit}
+                >
                   <strong>{suitSymbols[suit]}</strong>
                   <span>{suitPowerShortLabelsEs[suit]}</span>
                 </p>
@@ -240,7 +527,10 @@ export function App() {
       </section>
 
       <section className="played-row" aria-label="Cards played against the enemy">
-        <div className={`played-pool ${hasSelectedCards ? 'can-play' : ''}`} onClick={playSelectedCards}>
+        <div
+          className={`played-pool ${playedDensityClass(playedCards.length)} ${hasSelectedCards && !isResolving ? 'can-play' : ''}`}
+          onClick={playSelectedCards}
+        >
           {playedCards.length === 0 ? (
             <span className="pool-empty">Cartas jugadas contra el enemigo</span>
           ) : (
@@ -251,39 +541,55 @@ export function App() {
 
       <section className="hand-zone" aria-label="Player hand and piles">
         <div className="hand-grid">
-          {Array.from({ length: 4 }, (_, index) =>
-            handCards[index] ? (
-              <CardView
-                card={handCards[index]}
-                isDimmed={hasSelectedCards && !selectedCardIds.has(handCards[index].id)}
-                isSelected={selectedCardIds.has(handCards[index].id)}
-                key={handCards[index].id}
-                onClick={() => toggleSelectedCard(handCards[index].id)}
-                ref={setCardRef(handCards[index].id)}
-              />
-            ) : (
-              <EmptyHandSlot key={index} />
-            ),
-          )}
-          <TavernPile count={gameState.tavernDeck.length} />
-          {Array.from({ length: 4 }, (_, offset) => {
-            const index = offset + 4;
-            return handCards[index] ? (
-              <CardView
-                card={handCards[index]}
-                isDimmed={hasSelectedCards && !selectedCardIds.has(handCards[index].id)}
-                isSelected={selectedCardIds.has(handCards[index].id)}
-                key={handCards[index].id}
-                onClick={() => toggleSelectedCard(handCards[index].id)}
-                ref={setCardRef(handCards[index].id)}
-              />
-            ) : (
-              <EmptyHandSlot key={index} />
+          {Array.from({ length: 4 }, (_, index) => {
+            const card = handCards[index];
+            return (
+              <HandSlot index={index} key={index} setSlotRef={setHandSlotRef}>
+                {card ? (
+                <CardView
+                  card={card}
+                  isDimmed={hasSelectedCards && !selectedCardIds.has(card.id)}
+                  className={`${rejectedCardId === card.id ? 'rejected' : ''} ${drawingCardIds.has(card.id) ? 'drawing-hidden' : ''}`}
+                  isSelected={selectedCardIds.has(card.id)}
+                  onClick={() => toggleSelectedCard(card)}
+                  ref={setCardRef(card.id)}
+                />
+              ) : (
+                <EmptyHandSlot />
+              )}
+              </HandSlot>
             );
           })}
-          <DiscardPile count={gameState.discardPile.length} topCard={topDiscard} />
+          <TavernPile count={tavernDeck.length} ref={tavernPileRef} />
+          {Array.from({ length: 4 }, (_, offset) => {
+            const index = offset + 4;
+            const card = handCards[index];
+            return (
+              <HandSlot index={index} key={index} setSlotRef={setHandSlotRef}>
+                {card ? (
+                  <CardView
+                    card={card}
+                    isDimmed={hasSelectedCards && !selectedCardIds.has(card.id)}
+                    className={`${rejectedCardId === card.id ? 'rejected' : ''} ${drawingCardIds.has(card.id) ? 'drawing-hidden' : ''}`}
+                    isSelected={selectedCardIds.has(card.id)}
+                    onClick={() => toggleSelectedCard(card)}
+                    ref={setCardRef(card.id)}
+                  />
+                ) : (
+                  <EmptyHandSlot />
+                )}
+              </HandSlot>
+            );
+          })}
+          <DiscardPile count={discardPile.length} isShuffling={shufflingPile === 'discard'} ref={discardPileRef} topCard={topDiscard} />
         </div>
       </section>
     </main>
   );
+}
+
+function compactHand(cards: Array<Card | undefined>) {
+  const compacted = cards.filter((card): card is Card => Boolean(card));
+
+  return Array.from({ length: cards.length }, (_, index) => compacted[index]);
 }

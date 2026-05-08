@@ -35,12 +35,32 @@ button {
 }
 
 .game-shell {
+  position: relative;
   display: grid;
   grid-template-rows: auto auto auto;
   gap: 0.75rem;
   width: min(100%, 52rem);
   margin: 0 auto;
   padding: max(0.2rem, env(safe-area-inset-top)) 0.9rem max(0.75rem, env(safe-area-inset-bottom));
+}
+
+.toast {
+  position: fixed;
+  top: max(0.55rem, env(safe-area-inset-top));
+  left: 50%;
+  z-index: 20;
+  max-width: min(24rem, calc(100vw - 1.2rem));
+  padding: 0.65rem 0.9rem;
+  border: 1px solid rgba(201, 76, 76, 0.58);
+  border-radius: 999px;
+  background: rgba(42, 24, 23, 0.94);
+  box-shadow: 0 0.7rem 1.6rem rgba(0, 0, 0, 0.32);
+  color: #ffe1df;
+  font-size: 0.82rem;
+  font-weight: 900;
+  text-align: center;
+  transform: translateX(-50%);
+  animation: toast-in 180ms ease-out;
 }
 
 .zone-heading,
@@ -86,12 +106,19 @@ p {
   font-size: 0.72rem;
   font-weight: 800;
   text-align: center;
+  transition:
+    background 260ms ease,
+    border-color 260ms ease,
+    color 260ms ease,
+    transform 260ms ease;
 }
 
 .phase-track .active {
   border-color: rgba(216, 176, 93, 0.7);
   background: rgba(216, 176, 93, 0.13);
   color: #fff8ec;
+  transform: translateY(-0.08rem);
+  animation: phase-step-enter 520ms ease-out;
 }
 
 .board-grid {
@@ -328,6 +355,15 @@ p {
   text-decoration: line-through;
 }
 
+.power-list .active-power {
+  background: rgba(216, 176, 93, 0.18);
+  box-shadow:
+    0 0 0.7rem rgba(216, 176, 93, 0.45),
+    inset 0 0 0 1px rgba(216, 176, 93, 0.22);
+  color: #fff4dc;
+  animation: power-pulse 520ms ease-out;
+}
+
 .played-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -392,6 +428,11 @@ p {
   gap: 0.42rem;
 }
 
+.hand-slot {
+  width: 100%;
+  aspect-ratio: 0.68;
+}
+
 .playing-card {
   display: grid;
   width: 100%;
@@ -401,7 +442,9 @@ p {
   border-radius: 8px;
   background: #fbf5eb;
   color: var(--ink);
-  box-shadow: 0 0.8rem 1.4rem rgba(0, 0, 0, 0.18);
+  box-shadow:
+    0 0.25rem 0.45rem rgba(0, 0, 0, 0.2),
+    0 0.9rem 1.4rem rgba(0, 0, 0, 0.22);
   cursor: pointer;
   text-align: left;
   transition:
@@ -468,6 +511,54 @@ p {
   opacity: 0.5;
 }
 
+.playing-card.drawing-hidden {
+  opacity: 0;
+}
+
+.playing-card.rejected {
+  animation: rejected-card 420ms ease-in-out;
+  box-shadow:
+    0 0.25rem 0.45rem rgba(0, 0, 0, 0.2),
+    0 0.9rem 1.4rem rgba(0, 0, 0, 0.22),
+    0 0 1rem rgba(201, 76, 76, 0.95),
+    0 0 1.8rem rgba(201, 76, 76, 0.48);
+}
+
+@keyframes rejected-card {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+
+  18% {
+    transform: translateX(-0.28rem) rotate(-1.5deg);
+  }
+
+  36% {
+    transform: translateX(0.28rem) rotate(1.5deg);
+  }
+
+  54% {
+    transform: translateX(-0.18rem) rotate(-1deg);
+  }
+
+  72% {
+    transform: translateX(0.16rem) rotate(1deg);
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -0.35rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
 @keyframes selected-card-glow {
   0%,
   100% {
@@ -486,9 +577,43 @@ p {
 }
 
 .played-card {
+  position: relative;
+  display: block;
   flex: 0 0 4.8rem;
   width: 4.8rem;
-  margin-left: clamp(-1.9rem, -3vw, -0.6rem);
+  box-shadow:
+    -0.32rem 0 0.8rem rgba(0, 0, 0, 0.28),
+    0.18rem 0.5rem 1rem rgba(0, 0, 0, 0.34);
+}
+
+.density-loose .played-card {
+  margin-left: -0.55rem;
+}
+
+.density-medium .played-card {
+  margin-left: -1.55rem;
+}
+
+.density-tight .played-card {
+  margin-left: -2.35rem;
+}
+
+.played-card .card-corner-bottom {
+  display: none;
+}
+
+.played-card .card-corner {
+  position: absolute;
+  top: 0.32rem;
+  left: 0.32rem;
+}
+
+.played-card strong {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  font-size: 2rem;
+  transform: translate(-50%, -50%);
 }
 
 .played-card:first-child {
@@ -542,6 +667,10 @@ p {
   color: rgba(248, 241, 232, 0.48);
 }
 
+.is-shuffling {
+  animation: pile-shuffle 620ms ease-in-out;
+}
+
 .discard-wrapper {
   position: relative;
 }
@@ -563,6 +692,150 @@ p {
   background: rgba(26, 24, 23, 0.72);
   color: #fff8ec;
   font-size: 0.9rem;
+}
+
+.heal-flight-card {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 30;
+  width: 1.4rem;
+  aspect-ratio: 0.68;
+  border-radius: 4px;
+  background:
+    linear-gradient(135deg, rgba(216, 176, 93, 0.36), transparent 42%),
+    repeating-linear-gradient(45deg, rgba(248, 241, 232, 0.15) 0 0.18rem, transparent 0.18rem 0.36rem),
+    var(--panel-strong);
+  box-shadow:
+    0 0.3rem 0.8rem rgba(0, 0, 0, 0.38),
+    0 0 0.8rem rgba(216, 176, 93, 0.32);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(var(--from-x), var(--from-y)) translate(-50%, -50%) scale(0.9) rotate(-8deg);
+  animation: heal-card-flight 720ms cubic-bezier(0.22, 1, 0.36, 1) var(--delay) forwards;
+}
+
+.draw-flight-card {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 31;
+  width: min(4.6rem, 20vw);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(var(--from-x), var(--from-y)) translate(-50%, -50%) scale(0.72) rotateY(82deg);
+  animation:
+    draw-card-reveal 150ms ease-out var(--delay) forwards,
+    draw-card-flight 460ms cubic-bezier(0.22, 1, 0.36, 1) calc(var(--delay) + 150ms) forwards;
+}
+
+.draw-flight-card .card-corner-bottom {
+  display: none;
+}
+
+@keyframes draw-card-reveal {
+  0% {
+    opacity: 0;
+    transform: translate(var(--from-x), var(--from-y)) translate(-50%, -50%) scale(0.72) rotateY(82deg);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate(var(--from-x), var(--from-y)) translate(-50%, -50%) scale(0.9) rotateY(0deg);
+  }
+}
+
+@keyframes draw-card-flight {
+  0% {
+    opacity: 1;
+    transform: translate(var(--from-x), var(--from-y)) translate(-50%, -50%) scale(0.9) rotateY(0deg);
+  }
+
+  65% {
+    opacity: 1;
+    transform: translate(var(--to-x), var(--to-y)) translate(-50%, -50%) scale(0.96) rotate(1deg);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(var(--to-x), var(--to-y)) translate(-50%, -50%) scale(0.86) rotate(0deg);
+  }
+}
+
+@keyframes power-pulse {
+  0% {
+    transform: scale(1);
+  }
+
+  45% {
+    transform: scale(1.04);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes phase-step-enter {
+  0% {
+    box-shadow: 0 0 0 rgba(216, 176, 93, 0);
+  }
+
+  45% {
+    box-shadow: 0 0 1rem rgba(216, 176, 93, 0.42);
+  }
+
+  100% {
+    box-shadow: 0 0 0 rgba(216, 176, 93, 0);
+  }
+}
+
+@keyframes pile-shuffle {
+  0%,
+  100% {
+    transform: translateX(0) rotate(0deg);
+  }
+
+  18% {
+    transform: translateX(-0.22rem) rotate(-2deg);
+  }
+
+  36% {
+    transform: translateX(0.22rem) rotate(2deg);
+  }
+
+  54% {
+    transform: translateX(-0.14rem) rotate(-1.3deg);
+  }
+
+  72% {
+    transform: translateX(0.12rem) rotate(1deg);
+  }
+}
+
+@keyframes heal-card-flight {
+  0% {
+    opacity: 0;
+    transform: translate(var(--from-x), var(--from-y)) translate(-50%, -50%) scale(0.82) rotate(-8deg);
+  }
+
+  18% {
+    opacity: 1;
+  }
+
+  68% {
+    opacity: 1;
+    transform: translate(
+        calc((var(--from-x) * 0.35) + (var(--to-x) * 0.65)),
+        calc((var(--from-y) * 0.35) + (var(--to-y) * 0.65) - 2.1rem)
+      )
+      translate(-50%, -50%) scale(1.05) rotate(8deg);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(var(--to-x), var(--to-y)) translate(-50%, -50%) scale(0.72) rotate(0deg);
+  }
 }
 
 @media (max-width: 560px) {
