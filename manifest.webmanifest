@@ -1,0 +1,10 @@
+{
+  "name": "Regicide",
+  "short_name": "Regicide",
+  "description": "Mobile-first Regicide card game.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#151414",
+  "theme_color": "#151414",
+  "orientation": "portrait"
+}
