@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Regicide</string>
+    <string name="title_activity_main">Regicide</string>
+    <string name="package_name">com.javirs85.regicide</string>
+    <string name="custom_url_scheme">com.javirs85.regicide</string>
+</resources>

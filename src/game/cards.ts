@@ -59,6 +59,13 @@ export const suitPowerDescriptionsEs: Record<Suit, string> = {
   spades: 'Defiende: reduce acumulativamente el ataque del enemigo.',
 };
 
+export const suitPowerShortLabelsEs: Record<Suit, string> = {
+  hearts: '+ taberna',
+  diamonds: '+ mano',
+  clubs: 'daño x2',
+  spades: '+ escudo',
+};
+
 export function cardValue(rank: Rank): number {
   if (rank === 'jester') return 0;
   if (rank === 'ace') return 1;
