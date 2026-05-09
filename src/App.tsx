@@ -1,16 +1,19 @@
 import { forwardRef, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Shield, Skull, Swords } from 'lucide-react';
 import {
+  isRoyal,
   rankLabels,
+  royalStats,
   suitPowerShortLabelsEs,
   suitSymbols,
   suits,
   type Card,
+  type RoyalRank,
   type Suit,
 } from './game/cards';
 import { shuffleDeck } from './game/decks';
 import { validateCardSelection } from './game/playValidation';
-import { createInitialGameState, getDefeatedSuitsForCurrentTier } from './game/state';
+import { createInitialGameState, type EnemyState } from './game/state';
 
 const turnSteps = [
   { phase: 'awaitingAction', label: '1. Jugar o pasar' },
@@ -176,13 +179,17 @@ export function App() {
   const initialHand = gameState.players[gameState.currentPlayerIndex].hand as Array<Card | undefined>;
   const initialDebugDiscard = gameState.tavernDeck.slice(0, debugDiscardSeedCount);
   const initialTavernDeck = gameState.tavernDeck.slice(debugDiscardSeedCount);
-  const enemy = gameState.currentEnemy;
+  const [castleDeck, setCastleDeck] = useState(gameState.castleDeck);
+  const [enemy, setEnemy] = useState(gameState.currentEnemy);
+  const [defeatedEnemies, setDefeatedEnemies] = useState<Card[]>(gameState.defeatedEnemies);
   const [handCards, setHandCards] = useState<Array<Card | undefined>>(initialHand);
   const [playedCards, setPlayedCards] = useState<Card[]>(gameState.playedAgainstCurrentEnemy);
   const [tavernDeck, setTavernDeck] = useState<Card[]>(initialTavernDeck);
   const [discardPile, setDiscardPile] = useState<Card[]>(initialDebugDiscard);
   const [turnPhase, setTurnPhase] = useState(gameState.turnPhase);
   const [selectedCardIds, setSelectedCardIds] = useState<Set<string>>(() => new Set());
+  const [damageDiscardIds, setDamageDiscardIds] = useState<Set<string>>(() => new Set());
+  const [discardingCardIds, setDiscardingCardIds] = useState<Set<string>>(() => new Set());
   const [rejectedCardId, setRejectedCardId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [activePower, setActivePower] = useState<Suit | null>(null);
@@ -198,10 +205,19 @@ export function App() {
   const [drawingCardIds, setDrawingCardIds] = useState<Set<string>>(() => new Set());
   const [isResolving, setIsResolving] = useState(false);
   const enemyCard = enemy.card;
-  const enemyHealthRemaining = enemy.health - enemyDamageTaken;
-  const defeatedSuits = getDefeatedSuitsForCurrentTier(gameState);
+  const enemyHealthRemaining = Math.max(0, enemy.health - enemyDamageTaken);
+  const enemyAttackDamage = Math.max(0, enemy.baseAttack - spadesShieldTotal);
+  const damageDiscardValue = handCards.reduce((sum, card) => (card && damageDiscardIds.has(card.id) ? sum + card.value : sum), 0);
+  const isDamageDiscardPhase = turnPhase === 'awaitingDamageDiscard';
+  const isDamageDiscardReady = damageDiscardValue >= enemyAttackDamage;
+  const defeatedSuits = new Set(
+    defeatedEnemies
+      .filter((card): card is Card & { rank: RoyalRank; suit: Suit } => isRoyal(card) && card.rank === enemyCard.rank)
+      .map((card) => card.suit),
+  );
   const topDiscard = discardPile.at(-1);
   const hasSelectedCards = selectedCardIds.size > 0;
+  const hasDamageDiscardSelection = damageDiscardIds.size > 0;
   const cardRefs = useRef(new Map<string, HTMLButtonElement>());
   const handSlotRefs = useRef(new Map<number, HTMLDivElement>());
   const pendingFlightRects = useRef(new Map<string, DOMRect>());
@@ -251,7 +267,7 @@ export function App() {
   }
 
   function toggleSelectedCard(card: Card) {
-    if (isResolving) return;
+    if (isResolving || isDamageDiscardPhase) return;
 
     const cardId = card.id;
 
@@ -277,6 +293,31 @@ export function App() {
       next.add(cardId);
       return next;
     });
+  }
+
+  function toggleDamageDiscardCard(card: Card) {
+    if (!isDamageDiscardPhase || isResolving) return;
+
+    setDamageDiscardIds((current) => {
+      const next = new Set(current);
+
+      if (next.has(card.id)) {
+        next.delete(card.id);
+      } else {
+        next.add(card.id);
+      }
+
+      return next;
+    });
+  }
+
+  function handleHandCardClick(card: Card) {
+    if (isDamageDiscardPhase) {
+      toggleDamageDiscardCard(card);
+      return;
+    }
+
+    toggleSelectedCard(card);
   }
 
   function setCardRef(cardId: string) {
@@ -423,13 +464,72 @@ export function App() {
   }
 
   async function resolveDamage(cards: Card[]) {
-    const damage = calculateDamage(cards);
+    const damage = calculateDamage(cards, enemyCard.suit !== 'clubs' || gameState.enemyImmunityCancelled);
+    const damageAfterHit = enemyDamageTaken + damage;
 
     setIsDamageAnimating(true);
     await sleep(Math.floor(damageBubbleAnimationMs * 0.42));
-    setEnemyDamageTaken((current) => current + damage);
+    setEnemyDamageTaken(damageAfterHit);
     await sleep(Math.ceil(damageBubbleAnimationMs * 0.58));
     setIsDamageAnimating(false);
+
+    if (damageAfterHit >= enemy.health) {
+      await defeatCurrentEnemy(damageAfterHit);
+      return;
+    }
+
+    setTurnPhase('awaitingDamageDiscard');
+  }
+
+  async function confirmDamageDiscard() {
+    if (!isDamageDiscardPhase || isResolving || !isDamageDiscardReady) return;
+
+    setIsResolving(true);
+
+    const discardedCards = handCards.filter((card): card is Card => {
+      if (!card) return false;
+      return damageDiscardIds.has(card.id);
+    });
+
+    await animateDamageDiscards(discardedCards);
+    setDiscardPile((cards) => [...cards, ...discardedCards]);
+    setHandCards((cards) => compactHand(cards.filter((card) => !card || !damageDiscardIds.has(card.id))));
+    setDamageDiscardIds(new Set());
+    setTurnPhase('awaitingAction');
+    setIsResolving(false);
+  }
+
+  async function defeatCurrentEnemy(finalDamageTaken: number) {
+    await sleep(360);
+
+    const exactKill = finalDamageTaken === enemy.health;
+    const nextCastleCard = castleDeck[0];
+    const remainingCastleDeck = castleDeck.slice(1);
+    const defeatedEnemyCard = enemy.card;
+
+    if (exactKill) {
+      setTavernDeck((cards) => [defeatedEnemyCard, ...cards]);
+    } else {
+      setDiscardPile((cards) => [...cards, defeatedEnemyCard]);
+    }
+
+    setDiscardPile((cards) => [...cards, ...playedCards]);
+    setDefeatedEnemies((cards) => [...cards, defeatedEnemyCard]);
+    setPlayedCards([]);
+    setDoubledCardIds(new Set());
+    setSpadesShieldTotal(0);
+    setEnemyDamageTaken(0);
+    setShieldPulse(null);
+    setActivePower(null);
+
+    if (nextCastleCard && isRoyal(nextCastleCard)) {
+      setCastleDeck(remainingCastleDeck);
+      setEnemy(createEnemyState(nextCastleCard));
+      setTurnPhase('awaitingAction');
+    } else {
+      setCastleDeck([]);
+      setTurnPhase('gameOver');
+    }
   }
 
   async function runPileShuffle(pile: PileName) {
@@ -514,6 +614,42 @@ export function App() {
     setClubsStamps(stamps);
     await sleep(clubsStampDurationMs + clubsStampDelayMs * (stamps.length - 1) + 100);
     setClubsStamps([]);
+  }
+
+  async function animateDamageDiscards(cards: Card[]) {
+    const toRect = discardPileRef.current?.getBoundingClientRect();
+    if (!toRect) return;
+
+    setDiscardingCardIds(new Set(cards.map((card) => card.id)));
+
+    const animations = cards.flatMap((card) => {
+      const element = cardRefs.current.get(card.id);
+      if (!element) return [];
+
+      const fromRect = element.getBoundingClientRect();
+      return element.animate(
+        [
+          {
+            opacity: 1,
+            transform: 'translate(0, 0) scale(1) rotate(0deg)',
+          },
+          {
+            opacity: 0,
+            transform: `translate(${toRect.left + toRect.width / 2 - (fromRect.left + fromRect.width / 2)}px, ${
+              toRect.top + toRect.height / 2 - (fromRect.top + fromRect.height / 2)
+            }px) scale(0.42) rotate(8deg)`,
+          },
+        ],
+        {
+          duration: 520,
+          easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+          fill: 'forwards',
+        },
+      ).finished;
+    });
+
+    await Promise.allSettled(animations);
+    setDiscardingCardIds(new Set());
   }
 
   return (
@@ -632,9 +768,15 @@ export function App() {
                 <Skull size={16} />
                 {enemyDamageTaken}
               </span>
-              <span>
+              <span
+                className={`enemy-attack-bubble ${isDamageDiscardPhase ? 'is-discard-counter' : ''} ${
+                  isDamageDiscardPhase && isDamageDiscardReady ? 'is-ready' : ''
+                }`}
+                onClick={confirmDamageDiscard}
+                role={isDamageDiscardPhase ? 'button' : undefined}
+              >
                 <Swords size={16} />
-                {enemy.baseAttack}
+                {isDamageDiscardPhase ? `${damageDiscardValue}/${enemyAttackDamage}` : enemyAttackDamage}
               </span>
             </div>
           </div>
@@ -656,7 +798,7 @@ export function App() {
         </div>
       </section>
 
-      <section className="hand-zone" aria-label="Player hand and piles">
+      <section className={`hand-zone ${isDamageDiscardPhase ? 'damage-discard-mode' : ''}`} aria-label="Player hand and piles">
         <div className="hand-grid">
           {Array.from({ length: 4 }, (_, index) => {
             const card = handCards[index];
@@ -665,10 +807,15 @@ export function App() {
                 {card ? (
                 <CardView
                   card={card}
-                  isDimmed={hasSelectedCards && !selectedCardIds.has(card.id)}
-                  className={`${rejectedCardId === card.id ? 'rejected' : ''} ${drawingCardIds.has(card.id) ? 'drawing-hidden' : ''}`}
-                  isSelected={selectedCardIds.has(card.id)}
-                  onClick={() => toggleSelectedCard(card)}
+                  isDimmed={
+                    (!isDamageDiscardPhase && hasSelectedCards && !selectedCardIds.has(card.id)) ||
+                    (isDamageDiscardPhase && hasDamageDiscardSelection && !damageDiscardIds.has(card.id))
+                  }
+                  className={`${rejectedCardId === card.id ? 'rejected' : ''} ${drawingCardIds.has(card.id) ? 'drawing-hidden' : ''} ${
+                    damageDiscardIds.has(card.id) ? 'damage-selected' : ''
+                  } ${discardingCardIds.has(card.id) ? 'discarding' : ''}`}
+                  isSelected={!isDamageDiscardPhase && selectedCardIds.has(card.id)}
+                  onClick={() => handleHandCardClick(card)}
                   ref={setCardRef(card.id)}
                 />
               ) : (
@@ -686,10 +833,15 @@ export function App() {
                 {card ? (
                   <CardView
                     card={card}
-                    isDimmed={hasSelectedCards && !selectedCardIds.has(card.id)}
-                    className={`${rejectedCardId === card.id ? 'rejected' : ''} ${drawingCardIds.has(card.id) ? 'drawing-hidden' : ''}`}
-                    isSelected={selectedCardIds.has(card.id)}
-                    onClick={() => toggleSelectedCard(card)}
+                    isDimmed={
+                      (!isDamageDiscardPhase && hasSelectedCards && !selectedCardIds.has(card.id)) ||
+                      (isDamageDiscardPhase && hasDamageDiscardSelection && !damageDiscardIds.has(card.id))
+                    }
+                    className={`${rejectedCardId === card.id ? 'rejected' : ''} ${drawingCardIds.has(card.id) ? 'drawing-hidden' : ''} ${
+                      damageDiscardIds.has(card.id) ? 'damage-selected' : ''
+                    } ${discardingCardIds.has(card.id) ? 'discarding' : ''}`}
+                    isSelected={!isDamageDiscardPhase && selectedCardIds.has(card.id)}
+                    onClick={() => handleHandCardClick(card)}
                     ref={setCardRef(card.id)}
                   />
                 ) : (
@@ -705,11 +857,22 @@ export function App() {
   );
 }
 
-function calculateDamage(cards: Card[]) {
+function calculateDamage(cards: Card[], isClubsPowerActive: boolean) {
   const baseDamage = attackValue(cards);
   const hasActiveClubs = cards.some((card) => card.suit === 'clubs');
 
-  return hasActiveClubs ? baseDamage * 2 : baseDamage;
+  return hasActiveClubs && isClubsPowerActive ? baseDamage * 2 : baseDamage;
+}
+
+function createEnemyState(card: Card & { rank: RoyalRank; suit: Suit }): EnemyState {
+  const stats = royalStats[card.rank];
+
+  return {
+    card,
+    baseAttack: stats.attack,
+    health: stats.health,
+    damageTaken: 0,
+  };
 }
 
 function compactHand(cards: Array<Card | undefined>) {
