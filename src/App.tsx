@@ -226,6 +226,7 @@ export function App() {
   const cardRefs = useRef(new Map<string, HTMLButtonElement>());
   const handSlotRefs = useRef(new Map<number, HTMLDivElement>());
   const pendingFlightRects = useRef(new Map<string, DOMRect>());
+  const pendingHandCompactRects = useRef(new Map<string, DOMRect>());
   const tavernPileRef = useRef<HTMLDivElement | null>(null);
   const discardPileRef = useRef<HTMLDivElement | null>(null);
 
@@ -270,6 +271,41 @@ export function App() {
       );
     });
   }, [playedCards]);
+
+  useLayoutEffect(() => {
+    if (pendingHandCompactRects.current.size === 0) return;
+
+    const animations = Array.from(pendingHandCompactRects.current.entries());
+    pendingHandCompactRects.current = new Map();
+
+    animations.forEach(([cardId, firstRect]) => {
+      const element = cardRefs.current.get(cardId);
+      if (!element) return;
+
+      const lastRect = element.getBoundingClientRect();
+      const deltaX = firstRect.left - lastRect.left;
+      const deltaY = firstRect.top - lastRect.top;
+
+      if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) return;
+
+      element.animate(
+        [
+          {
+            transform: `translate(${deltaX}px, ${deltaY}px)`,
+            zIndex: 9,
+          },
+          {
+            transform: 'translate(0, 0)',
+            zIndex: 9,
+          },
+        ],
+        {
+          duration: 360,
+          easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+        },
+      );
+    });
+  }, [handCards]);
 
   function rejectCardSelection(cardId: string, reason: string) {
     setRejectedCardId(cardId);
@@ -348,6 +384,20 @@ export function App() {
     return spadesShieldTotal + attackValue(cards);
   }
 
+  function enterAwaitingAction(nextHand = handCards) {
+    nextHand.forEach((card) => {
+      if (!card) return;
+
+      const element = cardRefs.current.get(card.id);
+      if (!element) return;
+
+      pendingHandCompactRects.current.set(card.id, element.getBoundingClientRect());
+    });
+
+    setHandCards(compactHand(nextHand));
+    setTurnPhase('awaitingAction');
+  }
+
   async function playSelectedCards() {
     if (gameStatus !== 'playing' || selectedCardIds.size === 0 || isResolving) return;
     setIsResolving(true);
@@ -374,12 +424,12 @@ export function App() {
     setTurnPhase('resolvingSuitPowers');
     await sleep(phaseAnimationMs);
     await resolveHeartPower(selectedCards);
-    await resolveDiamondPower(selectedCards, handAfterPlay);
+    const handAfterPowers = await resolveDiamondPower(selectedCards, handAfterPlay);
     await resolveClubsPower(selectedCards);
     await resolveSpadesPower(selectedCards);
     setTurnPhase('resolvingDamage');
     await sleep(phaseAnimationMs);
-    await resolveDamage(selectedCards, expectedShieldAfterPlay(selectedCards), handAfterPlay, playedCardsAfterPlay);
+    await resolveDamage(selectedCards, expectedShieldAfterPlay(selectedCards), handAfterPowers, playedCardsAfterPlay);
     setIsResolving(false);
   }
 
@@ -413,7 +463,7 @@ export function App() {
     const suitsInPlay = playedSuits(cards);
     const diamondsPowerActive = suitsInPlay.has('diamonds') && (enemyCard.suit !== 'diamonds' || gameState.enemyImmunityCancelled);
 
-    if (!diamondsPowerActive) return;
+    if (!diamondsPowerActive) return currentHand;
 
     setActivePower('diamonds');
     await sleep(powerAnimationMs);
@@ -424,26 +474,26 @@ export function App() {
     if (drawCount > 0) {
       const drawnCards = tavernDeck.slice(0, drawCount);
       const targetSlots = emptySlots.slice(0, drawCount);
+      const nextHand = [...currentHand];
+
+      drawnCards.forEach((card, cardIndex) => {
+        nextHand[targetSlots[cardIndex]] = card;
+      });
 
       setDrawingCardIds(new Set(drawnCards.map((card) => card.id)));
-      setHandCards(() => {
-        const next = [...currentHand];
-
-        drawnCards.forEach((card, cardIndex) => {
-          next[targetSlots[cardIndex]] = card;
-        });
-
-        return next;
-      });
+      setHandCards(nextHand);
       await sleep(40);
       const drawAnimationMs = animateDrawCards(drawnCards, targetSlots);
       await sleep(drawAnimationMs - drawLandingOverlapMs);
       setDrawingCardIds(new Set());
       await sleep(drawLandingOverlapMs);
       setTavernDeck((cardsInDeck) => cardsInDeck.slice(drawCount));
+      setActivePower(null);
+      return nextHand;
     }
 
     setActivePower(null);
+    return currentHand;
   }
 
   async function resolveClubsPower(cards: Card[]) {
@@ -508,7 +558,7 @@ export function App() {
       setIsShieldBlockingAttack(true);
       await sleep(shieldBlockAnimationMs);
       setIsShieldBlockingAttack(false);
-      setTurnPhase('awaitingAction');
+      enterAwaitingAction(currentHand);
       return;
     }
 
@@ -531,10 +581,10 @@ export function App() {
     });
 
     await animateDamageDiscards(discardedCards);
+    const handAfterDiscard = compactHand(handCards.filter((card) => !card || !damageDiscardIds.has(card.id)));
     setDiscardPile((cards) => [...cards, ...discardedCards]);
-    setHandCards((cards) => compactHand(cards.filter((card) => !card || !damageDiscardIds.has(card.id))));
     setDamageDiscardIds(new Set());
-    setTurnPhase('awaitingAction');
+    enterAwaitingAction(handAfterDiscard);
     setIsResolving(false);
   }
 
@@ -545,6 +595,44 @@ export function App() {
     setSelectedCardIds(new Set());
     setDamageDiscardIds(new Set());
     setIsResolving(false);
+  }
+
+  function restartGame() {
+    const freshGameState = createInitialGameState(1);
+    const freshHand = freshGameState.players[freshGameState.currentPlayerIndex].hand as Array<Card | undefined>;
+    const freshDebugDiscard = freshGameState.tavernDeck.slice(0, debugDiscardSeedCount);
+    const freshTavernDeck = freshGameState.tavernDeck.slice(debugDiscardSeedCount);
+
+    setCastleDeck(freshGameState.castleDeck);
+    setEnemy(freshGameState.currentEnemy);
+    setDefeatedEnemies(freshGameState.defeatedEnemies);
+    setHandCards(freshHand);
+    setPlayedCards(freshGameState.playedAgainstCurrentEnemy);
+    setTavernDeck(freshTavernDeck);
+    setDiscardPile(freshDebugDiscard);
+    setGameStatus(freshGameState.status);
+    setGameOverReason(null);
+    setTurnPhase(freshGameState.turnPhase);
+    setSelectedCardIds(new Set());
+    setDamageDiscardIds(new Set());
+    setDiscardingCardIds(new Set());
+    setRejectedCardId(null);
+    setToastMessage(null);
+    setActivePower(null);
+    setShufflingPile(null);
+    setFlyingHealCards([]);
+    setFlyingDrawCards([]);
+    setClubsStamps([]);
+    setDoubledCardIds(new Set());
+    setSpadesShieldTotal(freshGameState.spadesShieldTotalPlayedAgainstEnemy);
+    setEnemyDamageTaken(freshGameState.currentEnemy.damageTaken);
+    setIsDamageAnimating(false);
+    setShieldPulse(null);
+    setIsShieldBlockingAttack(false);
+    setDrawingCardIds(new Set());
+    setIsResolving(false);
+    pendingFlightRects.current = new Map();
+    pendingHandCompactRects.current = new Map();
   }
 
   function winGame() {
@@ -582,7 +670,7 @@ export function App() {
     if (nextCastleCard && isRoyal(nextCastleCard)) {
       setCastleDeck(remainingCastleDeck);
       setEnemy(createEnemyState(nextCastleCard));
-      setTurnPhase('awaitingAction');
+      enterAwaitingAction();
     } else {
       setCastleDeck([]);
       winGame();
@@ -716,6 +804,9 @@ export function App() {
         <section className={`game-result ${gameStatus}`} aria-live="polite">
           <strong>{gameStatus === 'won' ? 'Victoria' : 'Derrota'}</strong>
           <span>{gameOverReason}</span>
+          <button onClick={restartGame} type="button">
+            Volver a empezar
+          </button>
         </section>
       ) : null}
       {flyingHealCards.map((flight) => (
