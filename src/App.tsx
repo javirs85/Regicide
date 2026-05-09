@@ -1,5 +1,5 @@
-import { forwardRef, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { Shield, Skull, Swords } from 'lucide-react';
+import { forwardRef, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { HeartPulse, Shield, Swords } from 'lucide-react';
 import {
   isRoyal,
   rankLabels,
@@ -34,7 +34,8 @@ const clubsStampDelayMs = 140;
 const spadesShieldAnimationMs = 900;
 const damageBubbleAnimationMs = 820;
 const phaseAnimationMs = 520;
-const debugDiscardSeedCount = 10;
+const shieldBlockAnimationMs = 920;
+const debugDiscardSeedCount = 0;
 
 type PileName = 'tavern' | 'discard';
 type FlyingHealCard = {
@@ -186,6 +187,8 @@ export function App() {
   const [playedCards, setPlayedCards] = useState<Card[]>(gameState.playedAgainstCurrentEnemy);
   const [tavernDeck, setTavernDeck] = useState<Card[]>(initialTavernDeck);
   const [discardPile, setDiscardPile] = useState<Card[]>(initialDebugDiscard);
+  const [gameStatus, setGameStatus] = useState(gameState.status);
+  const [gameOverReason, setGameOverReason] = useState<string | null>(null);
   const [turnPhase, setTurnPhase] = useState(gameState.turnPhase);
   const [selectedCardIds, setSelectedCardIds] = useState<Set<string>>(() => new Set());
   const [damageDiscardIds, setDamageDiscardIds] = useState<Set<string>>(() => new Set());
@@ -202,6 +205,7 @@ export function App() {
   const [enemyDamageTaken, setEnemyDamageTaken] = useState(enemy.damageTaken);
   const [isDamageAnimating, setIsDamageAnimating] = useState(false);
   const [shieldPulse, setShieldPulse] = useState<ShieldPulse | null>(null);
+  const [isShieldBlockingAttack, setIsShieldBlockingAttack] = useState(false);
   const [drawingCardIds, setDrawingCardIds] = useState<Set<string>>(() => new Set());
   const [isResolving, setIsResolving] = useState(false);
   const enemyCard = enemy.card;
@@ -209,6 +213,7 @@ export function App() {
   const enemyAttackDamage = Math.max(0, enemy.baseAttack - spadesShieldTotal);
   const damageDiscardValue = handCards.reduce((sum, card) => (card && damageDiscardIds.has(card.id) ? sum + card.value : sum), 0);
   const isDamageDiscardPhase = turnPhase === 'awaitingDamageDiscard';
+  const isDamagePaymentRequired = isDamageDiscardPhase && enemyAttackDamage > 0;
   const isDamageDiscardReady = damageDiscardValue >= enemyAttackDamage;
   const defeatedSuits = new Set(
     defeatedEnemies
@@ -223,6 +228,13 @@ export function App() {
   const pendingFlightRects = useRef(new Map<string, DOMRect>());
   const tavernPileRef = useRef<HTMLDivElement | null>(null);
   const discardPileRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (gameStatus !== 'playing' || isResolving || turnPhase !== 'awaitingAction') return;
+    if (handCards.some(Boolean)) return;
+
+    loseGame('No tienes cartas para jugar y en solitario no puedes pasar.');
+  }, [gameStatus, handCards, isResolving, turnPhase]);
 
   useLayoutEffect(() => {
     if (pendingFlightRects.current.size === 0) return;
@@ -267,7 +279,7 @@ export function App() {
   }
 
   function toggleSelectedCard(card: Card) {
-    if (isResolving || isDamageDiscardPhase) return;
+    if (gameStatus !== 'playing' || isResolving || isDamageDiscardPhase) return;
 
     const cardId = card.id;
 
@@ -296,7 +308,7 @@ export function App() {
   }
 
   function toggleDamageDiscardCard(card: Card) {
-    if (!isDamageDiscardPhase || isResolving) return;
+    if (gameStatus !== 'playing' || !isDamageDiscardPhase || isResolving) return;
 
     setDamageDiscardIds((current) => {
       const next = new Set(current);
@@ -330,8 +342,14 @@ export function App() {
     };
   }
 
+  function expectedShieldAfterPlay(cards: Card[]) {
+    if (!hasActiveSpadesPower(cards, enemyCard.suit, gameState.enemyImmunityCancelled)) return spadesShieldTotal;
+
+    return spadesShieldTotal + attackValue(cards);
+  }
+
   async function playSelectedCards() {
-    if (selectedCardIds.size === 0 || isResolving) return;
+    if (gameStatus !== 'playing' || selectedCardIds.size === 0 || isResolving) return;
     setIsResolving(true);
 
     const selectedCards = handCards.filter((card): card is Card => {
@@ -346,9 +364,10 @@ export function App() {
     });
 
     const handAfterPlay = compactHand(handCards.filter((card) => !card || !selectedCardIds.has(card.id)));
+    const playedCardsAfterPlay = [...playedCards, ...selectedCards];
 
     setHandCards(handAfterPlay);
-    setPlayedCards((cards) => [...cards, ...selectedCards]);
+    setPlayedCards(playedCardsAfterPlay);
     setSelectedCardIds(new Set());
 
     await sleep(460);
@@ -360,7 +379,7 @@ export function App() {
     await resolveSpadesPower(selectedCards);
     setTurnPhase('resolvingDamage');
     await sleep(phaseAnimationMs);
-    await resolveDamage(selectedCards);
+    await resolveDamage(selectedCards, expectedShieldAfterPlay(selectedCards), handAfterPlay, playedCardsAfterPlay);
     setIsResolving(false);
   }
 
@@ -463,7 +482,12 @@ export function App() {
     setActivePower(null);
   }
 
-  async function resolveDamage(cards: Card[]) {
+  async function resolveDamage(
+    cards: Card[],
+    shieldAfterPlay: number,
+    currentHand: Array<Card | undefined>,
+    currentPlayedCards: Card[],
+  ) {
     const damage = calculateDamage(cards, enemyCard.suit !== 'clubs' || gameState.enemyImmunityCancelled);
     const damageAfterHit = enemyDamageTaken + damage;
 
@@ -474,7 +498,22 @@ export function App() {
     setIsDamageAnimating(false);
 
     if (damageAfterHit >= enemy.health) {
-      await defeatCurrentEnemy(damageAfterHit);
+      await defeatCurrentEnemy(damageAfterHit, currentPlayedCards);
+      return;
+    }
+
+    const effectiveAttack = Math.max(0, enemy.baseAttack - shieldAfterPlay);
+    if (effectiveAttack === 0) {
+      setTurnPhase('awaitingDamageDiscard');
+      setIsShieldBlockingAttack(true);
+      await sleep(shieldBlockAnimationMs);
+      setIsShieldBlockingAttack(false);
+      setTurnPhase('awaitingAction');
+      return;
+    }
+
+    if (!canSatisfyDamage(currentHand, effectiveAttack)) {
+      loseGame(`No puedes descartar ${effectiveAttack} puntos para resistir el ataque.`);
       return;
     }
 
@@ -482,7 +521,7 @@ export function App() {
   }
 
   async function confirmDamageDiscard() {
-    if (!isDamageDiscardPhase || isResolving || !isDamageDiscardReady) return;
+    if (gameStatus !== 'playing' || !isDamageDiscardPhase || isResolving || !isDamageDiscardReady) return;
 
     setIsResolving(true);
 
@@ -499,7 +538,25 @@ export function App() {
     setIsResolving(false);
   }
 
-  async function defeatCurrentEnemy(finalDamageTaken: number) {
+  function loseGame(reason: string) {
+    setGameStatus('lost');
+    setGameOverReason(reason);
+    setTurnPhase('gameOver');
+    setSelectedCardIds(new Set());
+    setDamageDiscardIds(new Set());
+    setIsResolving(false);
+  }
+
+  function winGame() {
+    setGameStatus('won');
+    setGameOverReason('Has derrotado al ultimo Rey.');
+    setTurnPhase('gameOver');
+    setSelectedCardIds(new Set());
+    setDamageDiscardIds(new Set());
+    setIsResolving(false);
+  }
+
+  async function defeatCurrentEnemy(finalDamageTaken: number, cardsPlayedAgainstEnemy: Card[]) {
     await sleep(360);
 
     const exactKill = finalDamageTaken === enemy.health;
@@ -513,7 +570,7 @@ export function App() {
       setDiscardPile((cards) => [...cards, defeatedEnemyCard]);
     }
 
-    setDiscardPile((cards) => [...cards, ...playedCards]);
+    setDiscardPile((cards) => [...cards, ...cardsPlayedAgainstEnemy]);
     setDefeatedEnemies((cards) => [...cards, defeatedEnemyCard]);
     setPlayedCards([]);
     setDoubledCardIds(new Set());
@@ -528,7 +585,7 @@ export function App() {
       setTurnPhase('awaitingAction');
     } else {
       setCastleDeck([]);
-      setTurnPhase('gameOver');
+      winGame();
     }
   }
 
@@ -655,6 +712,12 @@ export function App() {
   return (
     <main className="game-shell">
       {toastMessage ? <div className="toast">{toastMessage}</div> : null}
+      {gameStatus !== 'playing' ? (
+        <section className={`game-result ${gameStatus}`} aria-live="polite">
+          <strong>{gameStatus === 'won' ? 'Victoria' : 'Derrota'}</strong>
+          <span>{gameOverReason}</span>
+        </section>
+      ) : null}
       {flyingHealCards.map((flight) => (
         <div
           className="heal-flight-card"
@@ -728,14 +791,23 @@ export function App() {
             </div>
           </section>
 
-          <div className="shield-meter" aria-label="Current defensive bonus">
-            <Shield size={72} strokeWidth={1.7} />
-            <strong className={shieldPulse ? 'is-charging' : ''}>{spadesShieldTotal}</strong>
-            {shieldPulse ? (
-              <span className="shield-gain" key={shieldPulse.id}>
-                +{shieldPulse.amount}
-              </span>
-            ) : null}
+          <div className="player-combat-panel" aria-label="Player combat values">
+            <div className="player-combat-meter player-attack-meter" aria-label="Attack dealt to enemy">
+              <Swords size={42} strokeWidth={1.8} />
+              <strong>{enemyDamageTaken}</strong>
+            </div>
+            <div
+              className={`player-combat-meter shield-meter ${isShieldBlockingAttack ? 'is-blocking-attack' : ''}`}
+              aria-label="Current defensive bonus"
+            >
+              <Shield size={42} strokeWidth={1.8} />
+              <strong className={shieldPulse ? 'is-charging' : ''}>{spadesShieldTotal}</strong>
+              {shieldPulse ? (
+                <span className="shield-gain" key={shieldPulse.id}>
+                  +{shieldPulse.amount}
+                </span>
+              ) : null}
+            </div>
           </div>
         </aside>
 
@@ -760,23 +832,21 @@ export function App() {
             </div>
             <strong>{suitSymbols[enemyCard.suit]}</strong>
             <div className="boss-stats" aria-label="Enemy combat values">
-              <span>
-                <Shield size={16} />
-                {enemyHealthRemaining}
-              </span>
               <span className={isDamageAnimating ? 'damage-bubble is-damage-animating' : 'damage-bubble'}>
-                <Skull size={16} />
-                {enemyDamageTaken}
+                <HeartPulse size={16} />
+                {enemyHealthRemaining}
               </span>
               <span
                 className={`enemy-attack-bubble ${isDamageDiscardPhase ? 'is-discard-counter' : ''} ${
-                  isDamageDiscardPhase && isDamageDiscardReady ? 'is-ready' : ''
+                  isDamagePaymentRequired && isDamageDiscardReady ? 'is-ready' : ''
+                } ${
+                  isDamageDiscardPhase && !isDamagePaymentRequired ? 'is-blocked' : ''
                 }`}
                 onClick={confirmDamageDiscard}
-                role={isDamageDiscardPhase ? 'button' : undefined}
+                role={isDamagePaymentRequired ? 'button' : undefined}
               >
                 <Swords size={16} />
-                {isDamageDiscardPhase ? `${damageDiscardValue}/${enemyAttackDamage}` : enemyAttackDamage}
+                {isDamagePaymentRequired ? `${damageDiscardValue}/${enemyAttackDamage}` : enemyAttackDamage}
               </span>
             </div>
           </div>
@@ -798,7 +868,7 @@ export function App() {
         </div>
       </section>
 
-      <section className={`hand-zone ${isDamageDiscardPhase ? 'damage-discard-mode' : ''}`} aria-label="Player hand and piles">
+      <section className={`hand-zone ${isDamagePaymentRequired ? 'damage-discard-mode' : ''}`} aria-label="Player hand and piles">
         <div className="hand-grid">
           {Array.from({ length: 4 }, (_, index) => {
             const card = handCards[index];
@@ -862,6 +932,14 @@ function calculateDamage(cards: Card[], isClubsPowerActive: boolean) {
   const hasActiveClubs = cards.some((card) => card.suit === 'clubs');
 
   return hasActiveClubs && isClubsPowerActive ? baseDamage * 2 : baseDamage;
+}
+
+function canSatisfyDamage(cards: Array<Card | undefined>, damage: number) {
+  return cards.reduce((sum, card) => sum + (card?.value ?? 0), 0) >= damage;
+}
+
+function hasActiveSpadesPower(cards: Card[], enemySuit: Suit, enemyImmunityCancelled: boolean) {
+  return cards.some((card) => card.suit === 'spades') && (enemySuit !== 'spades' || enemyImmunityCancelled);
 }
 
 function createEnemyState(card: Card & { rank: RoyalRank; suit: Suit }): EnemyState {

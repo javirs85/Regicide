@@ -63,6 +63,38 @@ button {
   animation: toast-in 180ms ease-out;
 }
 
+.game-result {
+  display: grid;
+  gap: 0.18rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid rgba(248, 241, 232, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.055);
+  box-shadow: 0 0.7rem 1.6rem rgba(0, 0, 0, 0.26);
+}
+
+.game-result strong {
+  font-size: 1rem;
+  font-weight: 1000;
+  line-height: 1;
+}
+
+.game-result span {
+  color: rgba(248, 241, 232, 0.78);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.game-result.won {
+  border-color: rgba(79, 143, 107, 0.58);
+  background: rgba(79, 143, 107, 0.16);
+}
+
+.game-result.lost {
+  border-color: rgba(201, 76, 76, 0.58);
+  background: rgba(201, 76, 76, 0.16);
+}
+
 .zone-heading,
 .boss-stats {
   display: flex;
@@ -159,7 +191,7 @@ p {
   align-self: end;
   justify-self: stretch;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.4rem;
 }
 
@@ -209,6 +241,16 @@ p {
     0 0 0.75rem rgba(79, 143, 107, 0.72),
     inset 0 0 0 1px rgba(231, 255, 240, 0.24);
   color: #f3fff7;
+}
+
+.enemy-attack-bubble.is-discard-counter.is-blocked {
+  background: #243f68;
+  box-shadow:
+    0 0 0.85rem rgba(143, 190, 255, 0.7),
+    inset 0 0 0 1px rgba(214, 231, 255, 0.3);
+  color: #f1f7ff;
+  cursor: default;
+  animation: blocked-attack-bubble 920ms ease-out;
 }
 
 .damage-bubble.is-damage-animating {
@@ -421,11 +463,37 @@ p {
   background: rgba(255, 255, 255, 0.045);
 }
 
-.shield-meter {
-  position: relative;
+.player-combat-panel {
   display: grid;
-  min-height: 6.2rem;
-  place-items: center;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  align-self: center;
+  min-height: 7.1rem;
+}
+
+.player-combat-meter {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 3rem;
+  border: 1px solid rgba(248, 241, 232, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.player-combat-meter strong {
+  font-size: 1.5rem;
+  font-weight: 1000;
+  line-height: 1;
+}
+
+.player-attack-meter {
+  color: #ffd782;
+}
+
+.shield-meter {
   color: #d6e7ff;
 }
 
@@ -434,10 +502,20 @@ p {
   filter: drop-shadow(0 0 0.8rem rgba(143, 190, 255, 0.85));
 }
 
+.shield-meter.is-blocking-attack svg {
+  animation: shield-block-attack 920ms cubic-bezier(0.16, 0.95, 0.22, 1);
+  filter:
+    drop-shadow(0 0 0.55rem rgba(143, 190, 255, 0.95))
+    drop-shadow(0 0 1.2rem rgba(143, 190, 255, 0.58));
+}
+
 .shield-meter strong {
-  position: absolute;
   font-size: 1.65rem;
   line-height: 1;
+}
+
+.shield-meter.is-blocking-attack strong {
+  animation: shield-block-number 920ms ease-out;
 }
 
 .shield-meter strong.is-charging {
@@ -1000,6 +1078,67 @@ p {
 
   72% {
     transform: scale(1.03);
+  }
+}
+
+@keyframes shield-block-attack {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  18% {
+    transform: scale(1.18);
+  }
+
+  36% {
+    transform: scale(0.92);
+  }
+
+  58% {
+    transform: scale(1.08);
+  }
+
+  78% {
+    transform: scale(0.99);
+  }
+}
+
+@keyframes shield-block-number {
+  0%,
+  100% {
+    color: #d6e7ff;
+    transform: scale(1);
+  }
+
+  28% {
+    color: #ffffff;
+    text-shadow:
+      0 0 0.45rem rgba(255, 255, 255, 0.95),
+      0 0 1rem rgba(143, 190, 255, 0.75);
+    transform: scale(1.28);
+  }
+
+  58% {
+    transform: scale(0.95);
+  }
+}
+
+@keyframes blocked-attack-bubble {
+  0% {
+    transform: scale(1);
+  }
+
+  32% {
+    transform: scale(0.88);
+  }
+
+  58% {
+    transform: scale(1.08);
+  }
+
+  100% {
+    transform: scale(1);
   }
 }
 
