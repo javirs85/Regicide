@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { HeartPulse, Shield, Swords } from 'lucide-react';
+import { HeartPulse, ScrollText, Shield, Swords, X } from 'lucide-react';
 import {
   isRoyal,
   rankLabels,
@@ -35,7 +35,15 @@ const spadesShieldAnimationMs = 900;
 const damageBubbleAnimationMs = 820;
 const phaseAnimationMs = 520;
 const shieldBlockAnimationMs = 920;
+const exactRewardAnimationMs = 1900;
 const debugDiscardSeedCount = 0;
+const phaseLabels: Record<(typeof turnSteps)[number]['phase'] | 'gameOver', string> = {
+  awaitingAction: 'Jugar o pasar',
+  resolvingSuitPowers: 'Poderes',
+  resolvingDamage: 'Dano',
+  awaitingDamageDiscard: 'Ataque enemigo',
+  gameOver: 'Fin de partida',
+};
 
 type PileName = 'tavern' | 'discard';
 type FlyingHealCard = {
@@ -75,15 +83,17 @@ type CardViewProps = {
   isDoubled?: boolean;
   isSelected?: boolean;
   onClick?: () => void;
+  showCornerValue?: boolean;
   style?: CSSProperties;
 };
 
 const CardView = forwardRef<HTMLButtonElement, CardViewProps>(function CardView(
-  { card, className = '', isDimmed = false, isDoubled = false, isSelected = false, onClick, style },
+  { card, className = '', isDimmed = false, isDoubled = false, isSelected = false, onClick, showCornerValue = false, style },
   ref,
 ) {
   const suitClass = card.suit === 'none' ? 'none' : card.suit;
   const suitSymbol = card.suit === 'none' ? '★' : suitSymbols[card.suit];
+  const shouldShowCornerValue = showCornerValue && isRoyal(card);
 
   return (
     <button
@@ -94,7 +104,10 @@ const CardView = forwardRef<HTMLButtonElement, CardViewProps>(function CardView(
       type="button"
     >
       <span className="card-corner">
-        <span>{rankLabels[card.rank]}</span>
+        <span className="card-rank-line">
+          <span>{rankLabels[card.rank]}</span>
+          {shouldShowCornerValue ? <span className="card-corner-value">{card.value}</span> : null}
+        </span>
         <small>{suitSymbol}</small>
       </span>
       <strong>{suitSymbol}</strong>
@@ -175,8 +188,25 @@ function playedSuits(cards: Card[]) {
   return new Set(cards.map((card) => card.suit).filter((suit): suit is Suit => suit !== 'none'));
 }
 
+function formatCard(card: Card) {
+  return card.suit === 'none' ? rankLabels[card.rank] : `${rankLabels[card.rank]} ${card.suit}`;
+}
+
+function formatCards(cards: Card[]) {
+  return cards.length > 0 ? cards.map(formatCard).join(', ') : 'ninguna';
+}
+
+function formatHand(cards: Array<Card | undefined>) {
+  const visibleCards = cards.filter((card): card is Card => Boolean(card));
+
+  if (visibleCards.length === 0) return 'sin cartas';
+
+  return visibleCards.map((card, index) => `${index + 1}. ${formatCard(card)}`).join(' | ');
+}
+
 export function App() {
   const gameState = useMemo(() => createInitialGameState(1), []);
+  const playerMaxHandSize = gameState.players[gameState.currentPlayerIndex].maxHandSize;
   const initialHand = gameState.players[gameState.currentPlayerIndex].hand as Array<Card | undefined>;
   const initialDebugDiscard = gameState.tavernDeck.slice(0, debugDiscardSeedCount);
   const initialTavernDeck = gameState.tavernDeck.slice(debugDiscardSeedCount);
@@ -207,7 +237,12 @@ export function App() {
   const [shieldPulse, setShieldPulse] = useState<ShieldPulse | null>(null);
   const [isShieldBlockingAttack, setIsShieldBlockingAttack] = useState(false);
   const [drawingCardIds, setDrawingCardIds] = useState<Set<string>>(() => new Set());
+  const [exactRewardCard, setExactRewardCard] = useState<Card | null>(null);
   const [isResolving, setIsResolving] = useState(false);
+  const [isLogOpen, setIsLogOpen] = useState(false);
+  const [logEntries, setLogEntries] = useState<string[]>(() => [
+    `Inicio: enemigo ${formatCard(gameState.currentEnemy.card)}. Ha quedado esta mano: ${formatHand(initialHand)}`,
+  ]);
   const enemyCard = enemy.card;
   const enemyHealthRemaining = Math.max(0, enemy.health - enemyDamageTaken);
   const enemyAttackDamage = Math.max(0, enemy.baseAttack - spadesShieldTotal);
@@ -384,7 +419,17 @@ export function App() {
     return spadesShieldTotal + attackValue(cards);
   }
 
+  function appendLog(message: string) {
+    setLogEntries((entries) => [...entries, `${String(entries.length + 1).padStart(2, '0')}. ${message}`]);
+  }
+
+  function logPhaseEntry(phase: keyof typeof phaseLabels, hand: Array<Card | undefined>, detail: string) {
+    appendLog(`${detail} Entra paso "${phaseLabels[phase]}". Ha quedado esta mano: ${formatHand(hand)}`);
+  }
+
   function enterAwaitingAction(nextHand = handCards) {
+    const compactedHand = compactHand(nextHand, playerMaxHandSize);
+
     nextHand.forEach((card) => {
       if (!card) return;
 
@@ -394,8 +439,9 @@ export function App() {
       pendingHandCompactRects.current.set(card.id, element.getBoundingClientRect());
     });
 
-    setHandCards(compactHand(nextHand));
+    setHandCards(compactedHand);
     setTurnPhase('awaitingAction');
+    logPhaseEntry('awaitingAction', compactedHand, 'Turno listo.');
   }
 
   async function playSelectedCards() {
@@ -413,7 +459,10 @@ export function App() {
       pendingFlightRects.current.set(card.id, element.getBoundingClientRect());
     });
 
-    const handAfterPlay = compactHand(handCards.filter((card) => !card || !selectedCardIds.has(card.id)));
+    const handAfterPlay = compactHand(
+      handCards.filter((card) => !card || !selectedCardIds.has(card.id)),
+      playerMaxHandSize,
+    );
     const playedCardsAfterPlay = [...playedCards, ...selectedCards];
 
     setHandCards(handAfterPlay);
@@ -422,12 +471,14 @@ export function App() {
 
     await sleep(460);
     setTurnPhase('resolvingSuitPowers');
+    logPhaseEntry('resolvingSuitPowers', handAfterPlay, `Has usado: ${formatCards(selectedCards)}.`);
     await sleep(phaseAnimationMs);
     await resolveHeartPower(selectedCards);
     const handAfterPowers = await resolveDiamondPower(selectedCards, handAfterPlay);
     await resolveClubsPower(selectedCards);
     await resolveSpadesPower(selectedCards);
     setTurnPhase('resolvingDamage');
+    logPhaseEntry('resolvingDamage', handAfterPowers, `Poderes resueltos para: ${formatCards(selectedCards)}.`);
     await sleep(phaseAnimationMs);
     await resolveDamage(selectedCards, expectedShieldAfterPlay(selectedCards), handAfterPowers, playedCardsAfterPlay);
     setIsResolving(false);
@@ -437,7 +488,10 @@ export function App() {
     const suitsInPlay = playedSuits(cards);
     const heartsPowerActive = suitsInPlay.has('hearts') && (enemyCard.suit !== 'hearts' || gameState.enemyImmunityCancelled);
 
-    if (!heartsPowerActive) return;
+    if (!heartsPowerActive) {
+      appendLog(`Corazones no se activa contra ${formatCard(enemyCard)}.`);
+      return;
+    }
 
     setActivePower('hearts');
     await sleep(powerAnimationMs);
@@ -454,6 +508,9 @@ export function App() {
 
       setDiscardPile(remainingDiscard);
       setTavernDeck((cardsInDeck) => [...cardsInDeck, ...healedCards]);
+      appendLog(`Corazones: curas ${formatCards(healedCards)} desde descarte a la taberna.`);
+    } else {
+      appendLog('Corazones: no hay descartes que curar.');
     }
 
     setActivePower(null);
@@ -463,12 +520,15 @@ export function App() {
     const suitsInPlay = playedSuits(cards);
     const diamondsPowerActive = suitsInPlay.has('diamonds') && (enemyCard.suit !== 'diamonds' || gameState.enemyImmunityCancelled);
 
-    if (!diamondsPowerActive) return currentHand;
+    if (!diamondsPowerActive) {
+      appendLog(`Diamantes no se activa contra ${formatCard(enemyCard)}.`);
+      return currentHand;
+    }
 
     setActivePower('diamonds');
     await sleep(powerAnimationMs);
 
-    const emptySlots = Array.from({ length: gameState.players[gameState.currentPlayerIndex].maxHandSize }, (_, index) => index).filter((index) => !currentHand[index]);
+    const emptySlots = Array.from({ length: playerMaxHandSize }, (_, index) => index).filter((index) => !currentHand[index]);
     const drawCount = Math.min(attackValue(cards), emptySlots.length, tavernDeck.length);
 
     if (drawCount > 0) {
@@ -489,10 +549,12 @@ export function App() {
       await sleep(drawLandingOverlapMs);
       setTavernDeck((cardsInDeck) => cardsInDeck.slice(drawCount));
       setActivePower(null);
+      appendLog(`Diamantes: has robado ${formatCards(drawnCards)}. Ha quedado esta mano: ${formatHand(nextHand)}`);
       return nextHand;
     }
 
     setActivePower(null);
+    appendLog(`Diamantes: no robas cartas. Ha quedado esta mano: ${formatHand(currentHand)}`);
     return currentHand;
   }
 
@@ -500,7 +562,10 @@ export function App() {
     const suitsInPlay = playedSuits(cards);
     const clubsPowerActive = suitsInPlay.has('clubs') && (enemyCard.suit !== 'clubs' || gameState.enemyImmunityCancelled);
 
-    if (!clubsPowerActive) return;
+    if (!clubsPowerActive) {
+      appendLog(`Treboles no se activa contra ${formatCard(enemyCard)}.`);
+      return;
+    }
 
     setActivePower('clubs');
     await sleep(powerAnimationMs);
@@ -511,6 +576,7 @@ export function App() {
       clubsCards.forEach((card) => next.add(card.id));
       return next;
     });
+    appendLog(`Treboles: duplicas el dano de ${formatCards(clubsCards)}.`);
     setActivePower(null);
   }
 
@@ -518,7 +584,10 @@ export function App() {
     const suitsInPlay = playedSuits(cards);
     const spadesPowerActive = suitsInPlay.has('spades') && (enemyCard.suit !== 'spades' || gameState.enemyImmunityCancelled);
 
-    if (!spadesPowerActive) return;
+    if (!spadesPowerActive) {
+      appendLog(`Picas no se activa contra ${formatCard(enemyCard)}.`);
+      return;
+    }
 
     const shieldAmount = attackValue(cards);
 
@@ -529,6 +598,7 @@ export function App() {
     setSpadesShieldTotal((current) => current + shieldAmount);
     await sleep(spadesShieldAnimationMs - 360);
     setShieldPulse(null);
+    appendLog(`Picas: sumas ${shieldAmount} de escudo acumulado.`);
     setActivePower(null);
   }
 
@@ -546,15 +616,17 @@ export function App() {
     setEnemyDamageTaken(damageAfterHit);
     await sleep(Math.ceil(damageBubbleAnimationMs * 0.58));
     setIsDamageAnimating(false);
+    appendLog(`Dano: haces ${damage} a ${formatCard(enemyCard)}; total recibido ${damageAfterHit}/${enemy.health}.`);
 
     if (damageAfterHit >= enemy.health) {
-      await defeatCurrentEnemy(damageAfterHit, currentPlayedCards);
+      await defeatCurrentEnemy(damageAfterHit, currentPlayedCards, currentHand);
       return;
     }
 
     const effectiveAttack = Math.max(0, enemy.baseAttack - shieldAfterPlay);
     if (effectiveAttack === 0) {
       setTurnPhase('awaitingDamageDiscard');
+      logPhaseEntry('awaitingDamageDiscard', currentHand, 'El escudo bloquea todo el ataque.');
       setIsShieldBlockingAttack(true);
       await sleep(shieldBlockAnimationMs);
       setIsShieldBlockingAttack(false);
@@ -568,6 +640,7 @@ export function App() {
     }
 
     setTurnPhase('awaitingDamageDiscard');
+    logPhaseEntry('awaitingDamageDiscard', currentHand, `El enemigo ataca por ${effectiveAttack}; toca descartar.`);
   }
 
   async function confirmDamageDiscard() {
@@ -581,9 +654,13 @@ export function App() {
     });
 
     await animateDamageDiscards(discardedCards);
-    const handAfterDiscard = compactHand(handCards.filter((card) => !card || !damageDiscardIds.has(card.id)));
+    const handAfterDiscard = compactHand(
+      handCards.filter((card) => !card || !damageDiscardIds.has(card.id)),
+      playerMaxHandSize,
+    );
     setDiscardPile((cards) => [...cards, ...discardedCards]);
     setDamageDiscardIds(new Set());
+    appendLog(`Ataque enemigo: descartas ${formatCards(discardedCards)} para pagar ${enemyAttackDamage}.`);
     enterAwaitingAction(handAfterDiscard);
     setIsResolving(false);
   }
@@ -592,6 +669,7 @@ export function App() {
     setGameStatus('lost');
     setGameOverReason(reason);
     setTurnPhase('gameOver');
+    logPhaseEntry('gameOver', handCards, `Derrota: ${reason}`);
     setSelectedCardIds(new Set());
     setDamageDiscardIds(new Set());
     setIsResolving(false);
@@ -630,21 +708,28 @@ export function App() {
     setShieldPulse(null);
     setIsShieldBlockingAttack(false);
     setDrawingCardIds(new Set());
+    setExactRewardCard(null);
     setIsResolving(false);
     pendingFlightRects.current = new Map();
     pendingHandCompactRects.current = new Map();
+    setLogEntries([`Inicio: enemigo ${formatCard(freshGameState.currentEnemy.card)}. Ha quedado esta mano: ${formatHand(freshHand)}`]);
   }
 
-  function winGame() {
+  function winGame(finalHand = handCards) {
     setGameStatus('won');
     setGameOverReason('Has derrotado al ultimo Rey.');
     setTurnPhase('gameOver');
+    logPhaseEntry('gameOver', finalHand, 'Victoria.');
     setSelectedCardIds(new Set());
     setDamageDiscardIds(new Set());
     setIsResolving(false);
   }
 
-  async function defeatCurrentEnemy(finalDamageTaken: number, cardsPlayedAgainstEnemy: Card[]) {
+  async function defeatCurrentEnemy(
+    finalDamageTaken: number,
+    cardsPlayedAgainstEnemy: Card[],
+    currentHand: Array<Card | undefined>,
+  ) {
     await sleep(360);
 
     const exactKill = finalDamageTaken === enemy.health;
@@ -654,8 +739,11 @@ export function App() {
 
     if (exactKill) {
       setTavernDeck((cards) => [defeatedEnemyCard, ...cards]);
+      appendLog(`Enemigo derrotado exacto: ${formatCard(defeatedEnemyCard)} vuelve arriba de la taberna.`);
+      await revealExactReward(defeatedEnemyCard);
     } else {
       setDiscardPile((cards) => [...cards, defeatedEnemyCard]);
+      appendLog(`Enemigo derrotado: ${formatCard(defeatedEnemyCard)} va al descarte.`);
     }
 
     setDiscardPile((cards) => [...cards, ...cardsPlayedAgainstEnemy]);
@@ -670,11 +758,18 @@ export function App() {
     if (nextCastleCard && isRoyal(nextCastleCard)) {
       setCastleDeck(remainingCastleDeck);
       setEnemy(createEnemyState(nextCastleCard));
-      enterAwaitingAction();
+      appendLog(`Nuevo enemigo revelado: ${formatCard(nextCastleCard)}.`);
+      enterAwaitingAction(currentHand);
     } else {
       setCastleDeck([]);
-      winGame();
+      winGame(currentHand);
     }
+  }
+
+  async function revealExactReward(card: Card) {
+    setExactRewardCard(card);
+    await sleep(exactRewardAnimationMs);
+    setExactRewardCard(null);
   }
 
   async function runPileShuffle(pile: PileName) {
@@ -772,7 +867,7 @@ export function App() {
       if (!element) return [];
 
       const fromRect = element.getBoundingClientRect();
-      return element.animate(
+      const animation = element.animate(
         [
           {
             opacity: 1,
@@ -790,10 +885,13 @@ export function App() {
           easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
           fill: 'forwards',
         },
-      ).finished;
+      );
+
+      return animation;
     });
 
-    await Promise.allSettled(animations);
+    await Promise.allSettled(animations.map((animation) => animation.finished));
+    animations.forEach((animation) => animation.cancel());
     setDiscardingCardIds(new Set());
   }
 
@@ -855,6 +953,49 @@ export function App() {
           x2
         </div>
       ))}
+      {exactRewardCard ? (
+        <section className="exact-reward-overlay" aria-live="assertive" onClick={() => setExactRewardCard(null)}>
+          <div className="exact-reward-aura" />
+          <div className="exact-reward-content">
+            <p>Victoria exacta</p>
+            <div className="exact-reward-card-wrap">
+              <CardView card={exactRewardCard} className="exact-reward-card" />
+              <span className="exact-reward-shine" />
+            </div>
+            <strong>Carta obtenida</strong>
+            <span>El golpe fue perfecto.</span>
+          </div>
+          <div className="exact-reward-sparks" aria-hidden="true">
+            {Array.from({ length: 12 }, (_, index) => (
+              <i key={index} />
+            ))}
+          </div>
+        </section>
+      ) : null}
+      <button className="log-button" onClick={() => setIsLogOpen(true)} type="button">
+        <ScrollText size={18} />
+        <span>Log</span>
+      </button>
+      {isLogOpen ? (
+        <section className="log-modal-backdrop" aria-label="Game log" aria-modal="true" role="dialog">
+          <div className="log-modal">
+            <header className="log-modal-header">
+              <div>
+                <p className="eyebrow">Debug</p>
+                <h2>Log de partida</h2>
+              </div>
+              <button aria-label="Cerrar log" className="log-close-button" onClick={() => setIsLogOpen(false)} type="button">
+                <X size={20} />
+              </button>
+            </header>
+            <div className="log-entry-list">
+              {logEntries.map((entry, index) => (
+                <p key={`${index}-${entry}`}>{entry}</p>
+              ))}
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="board-grid">
         <section className="phase-track" aria-label="Turn steps">
@@ -976,8 +1117,10 @@ export function App() {
                     damageDiscardIds.has(card.id) ? 'damage-selected' : ''
                   } ${discardingCardIds.has(card.id) ? 'discarding' : ''}`}
                   isSelected={!isDamageDiscardPhase && selectedCardIds.has(card.id)}
+                  key={card.id}
                   onClick={() => handleHandCardClick(card)}
                   ref={setCardRef(card.id)}
+                  showCornerValue
                 />
               ) : (
                 <EmptyHandSlot />
@@ -1002,8 +1145,10 @@ export function App() {
                       damageDiscardIds.has(card.id) ? 'damage-selected' : ''
                     } ${discardingCardIds.has(card.id) ? 'discarding' : ''}`}
                     isSelected={!isDamageDiscardPhase && selectedCardIds.has(card.id)}
+                    key={card.id}
                     onClick={() => handleHandCardClick(card)}
                     ref={setCardRef(card.id)}
+                    showCornerValue
                   />
                 ) : (
                   <EmptyHandSlot />
@@ -1044,8 +1189,8 @@ function createEnemyState(card: Card & { rank: RoyalRank; suit: Suit }): EnemySt
   };
 }
 
-function compactHand(cards: Array<Card | undefined>) {
+function compactHand(cards: Array<Card | undefined>, handSize: number) {
   const compacted = cards.filter((card): card is Card => Boolean(card));
 
-  return Array.from({ length: cards.length }, (_, index) => compacted[index]);
+  return Array.from({ length: handSize }, (_, index) => compacted[index]);
 }

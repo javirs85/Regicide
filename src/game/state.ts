@@ -1,6 +1,9 @@
 import { createCastleDeck, createSoloJesterReserve, createTavernDeck, type Deck } from './decks';
 import { isRoyal, royalStats, type Card, type RoyalRank, type Suit } from './cards';
 
+const useFixedTestDeal = true;
+const fixedTestDealSeed = 'regicide-debug-deal-2026-05-09';
+
 export type GameStatus = 'playing' | 'won' | 'lost';
 export type TurnPhase =
   | 'awaitingAction'
@@ -52,16 +55,38 @@ export function maxHandSizeForPlayerCount(playerCount: number): number {
   return handSizes[playerCount] ?? handSizes[1];
 }
 
+function createSeededRandom(seedText: string): () => number {
+  let seed = 0x811c9dc5;
+
+  for (let index = 0; index < seedText.length; index += 1) {
+    seed ^= seedText.charCodeAt(index);
+    seed = Math.imul(seed, 0x01000193);
+  }
+
+  return () => {
+    seed += 0x6d2b79f5;
+    let value = seed;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function createGameRandom(): () => number {
+  return useFixedTestDeal ? createSeededRandom(fixedTestDealSeed) : Math.random;
+}
+
 export function createInitialGameState(playerCount = 1): GameState {
+  const random = createGameRandom();
   const maxHandSize = maxHandSizeForPlayerCount(playerCount);
-  const castleDeck = createCastleDeck();
+  const castleDeck = createCastleDeck(random);
   const firstEnemyCard = castleDeck.shift();
 
   if (!firstEnemyCard || !isRoyal(firstEnemyCard)) {
     throw new Error('Castle deck must start with a royal enemy.');
   }
 
-  const tavernDeck = createTavernDeck(playerCount);
+  const tavernDeck = createTavernDeck(playerCount, random);
   const players = Array.from({ length: playerCount }, (_, index) => {
     const hand = tavernDeck.splice(0, maxHandSize);
 

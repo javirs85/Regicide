@@ -63,6 +63,105 @@ button {
   animation: toast-in 180ms ease-out;
 }
 
+.log-button {
+  position: fixed;
+  right: max(0.75rem, env(safe-area-inset-right));
+  bottom: max(0.75rem, env(safe-area-inset-bottom));
+  z-index: 18;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.6rem;
+  padding: 0 0.85rem;
+  border: 1px solid rgba(216, 176, 93, 0.48);
+  border-radius: 8px;
+  background: rgba(31, 28, 25, 0.94);
+  box-shadow: 0 0.85rem 1.8rem rgba(0, 0, 0, 0.36);
+  color: #fff8ec;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 950;
+}
+
+.log-button:hover {
+  border-color: rgba(216, 176, 93, 0.82);
+  background: rgba(52, 45, 37, 0.96);
+}
+
+.log-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(8, 7, 7, 0.72);
+}
+
+.log-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(42rem, 100%);
+  max-height: min(38rem, calc(100vh - 2rem));
+  border: 1px solid rgba(248, 241, 232, 0.18);
+  border-radius: 8px;
+  background: rgba(28, 25, 23, 0.98);
+  box-shadow: 0 1.4rem 3.2rem rgba(0, 0, 0, 0.48);
+  overflow: hidden;
+}
+
+.log-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid rgba(248, 241, 232, 0.12);
+}
+
+.log-modal-header h2 {
+  color: #fff8ec;
+  font-size: 1.05rem;
+  line-height: 1.1;
+}
+
+.log-close-button {
+  display: grid;
+  width: 2.35rem;
+  aspect-ratio: 1;
+  place-items: center;
+  border: 1px solid rgba(248, 241, 232, 0.16);
+  border-radius: 8px;
+  background: rgba(248, 241, 232, 0.08);
+  color: #fff8ec;
+  cursor: pointer;
+}
+
+.log-close-button:hover {
+  border-color: rgba(216, 176, 93, 0.55);
+  background: rgba(216, 176, 93, 0.16);
+}
+
+.log-entry-list {
+  display: grid;
+  align-content: start;
+  gap: 0.55rem;
+  min-height: 0;
+  padding: 0.85rem 1rem 1rem;
+  overflow-y: auto;
+}
+
+.log-entry-list p {
+  padding: 0.65rem 0.7rem;
+  border: 1px solid rgba(248, 241, 232, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  color: rgba(248, 241, 232, 0.86);
+  font-size: 0.78rem;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
 .game-result {
   display: grid;
   gap: 0.18rem;
@@ -667,6 +766,19 @@ p {
   font-size: 0.92rem;
 }
 
+.card-rank-line {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.16rem;
+  min-width: 0;
+}
+
+.card-corner .card-corner-value {
+  opacity: 0.48;
+  font-size: 0.66rem;
+  font-weight: 1000;
+}
+
 .card-corner small {
   align-self: auto;
   justify-self: auto;
@@ -1051,6 +1163,308 @@ p {
   text-transform: uppercase;
   transform: translate(var(--stamp-x), var(--stamp-y)) translate(-50%, -50%) translateY(-2.2rem) scale(2.2) rotate(-7deg);
   animation: clubs-stamp-impact 620ms cubic-bezier(0.18, 0.92, 0.24, 1) var(--delay) forwards;
+}
+
+.exact-reward-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: max(1rem, env(safe-area-inset-top)) 1rem max(1rem, env(safe-area-inset-bottom));
+  border: 0;
+  background:
+    radial-gradient(circle at 50% 38%, rgba(216, 176, 93, 0.25), transparent 20rem),
+    rgba(10, 9, 8, 0.82);
+  backdrop-filter: blur(7px);
+  cursor: pointer;
+  animation: exact-reward-fade-in 220ms ease-out;
+}
+
+.exact-reward-aura {
+  position: absolute;
+  width: min(34rem, 82vw);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, rgba(255, 245, 214, 0.34), transparent 36%),
+    conic-gradient(from 12deg, transparent, rgba(216, 176, 93, 0.28), transparent, rgba(201, 76, 76, 0.16), transparent);
+  filter: blur(0.3rem);
+  opacity: 0.86;
+  animation: exact-reward-aura 1.9s ease-in-out infinite;
+}
+
+.exact-reward-content {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  width: min(100%, 28rem);
+  justify-items: center;
+  gap: 0.6rem;
+  text-align: center;
+  text-shadow: 0 0.35rem 1rem rgba(0, 0, 0, 0.62);
+}
+
+.exact-reward-content p {
+  color: var(--gold);
+  font-size: 0.76rem;
+  font-weight: 1000;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  animation: exact-reward-text-in 520ms ease-out 180ms both;
+}
+
+.exact-reward-content > strong {
+  color: #fff8ec;
+  font-size: clamp(1.8rem, 7vw, 3.2rem);
+  font-weight: 1000;
+  line-height: 0.95;
+  animation: exact-reward-text-in 560ms ease-out 380ms both;
+}
+
+.exact-reward-content > span {
+  color: rgba(248, 241, 232, 0.78);
+  font-size: clamp(0.9rem, 3.2vw, 1.08rem);
+  font-weight: 900;
+  animation: exact-reward-text-in 560ms ease-out 470ms both;
+}
+
+.exact-reward-card-wrap {
+  position: relative;
+  width: min(56vw, 16.5rem);
+  max-width: calc((100vh - 10.5rem) * 0.68);
+  min-width: 10.5rem;
+  border-radius: 10px;
+  box-shadow:
+    0 2rem 4rem rgba(0, 0, 0, 0.54),
+    0 0 1.2rem rgba(216, 176, 93, 0.72),
+    0 0 3rem rgba(216, 176, 93, 0.28);
+  animation: exact-reward-card-in 780ms cubic-bezier(0.16, 1, 0.24, 1) both;
+}
+
+.exact-reward-card {
+  width: 100%;
+  border-color: rgba(216, 176, 93, 0.86);
+  box-shadow:
+    inset 0 0 0 0.1rem rgba(255, 248, 236, 0.54),
+    0 0.5rem 1.2rem rgba(0, 0, 0, 0.34);
+  cursor: pointer;
+}
+
+.exact-reward-card .card-corner span {
+  font-size: clamp(1.18rem, 5vw, 1.7rem);
+}
+
+.exact-reward-card .card-corner small {
+  font-size: clamp(1.12rem, 4.8vw, 1.62rem);
+}
+
+.exact-reward-card strong {
+  font-size: clamp(4.8rem, 25vw, 8.8rem);
+}
+
+.exact-reward-shine {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 10px;
+  pointer-events: none;
+}
+
+.exact-reward-shine::before {
+  position: absolute;
+  top: -22%;
+  left: -74%;
+  width: 42%;
+  height: 144%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.82), rgba(216, 176, 93, 0.42), transparent);
+  content: "";
+  filter: blur(0.05rem);
+  transform: rotate(18deg);
+  animation: exact-reward-shine 1.22s cubic-bezier(0.16, 0.84, 0.26, 1) 520ms both;
+}
+
+.exact-reward-sparks {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.exact-reward-sparks i {
+  position: absolute;
+  left: 50%;
+  top: 48%;
+  width: 0.26rem;
+  height: 0.26rem;
+  border-radius: 50%;
+  background: #ffe8a8;
+  box-shadow: 0 0 0.75rem rgba(216, 176, 93, 0.9);
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  animation: exact-reward-spark 1.25s ease-out calc(var(--spark-index) * 58ms + 260ms) both;
+}
+
+.exact-reward-sparks i:nth-child(1) {
+  --spark-index: 0;
+  --spark-x: -11rem;
+  --spark-y: -7rem;
+}
+
+.exact-reward-sparks i:nth-child(2) {
+  --spark-index: 1;
+  --spark-x: 9rem;
+  --spark-y: -8rem;
+}
+
+.exact-reward-sparks i:nth-child(3) {
+  --spark-index: 2;
+  --spark-x: -13rem;
+  --spark-y: 1rem;
+}
+
+.exact-reward-sparks i:nth-child(4) {
+  --spark-index: 3;
+  --spark-x: 12rem;
+  --spark-y: 2rem;
+}
+
+.exact-reward-sparks i:nth-child(5) {
+  --spark-index: 4;
+  --spark-x: -8rem;
+  --spark-y: 8rem;
+}
+
+.exact-reward-sparks i:nth-child(6) {
+  --spark-index: 5;
+  --spark-x: 7rem;
+  --spark-y: 8.5rem;
+}
+
+.exact-reward-sparks i:nth-child(7) {
+  --spark-index: 6;
+  --spark-x: -4rem;
+  --spark-y: -10rem;
+}
+
+.exact-reward-sparks i:nth-child(8) {
+  --spark-index: 7;
+  --spark-x: 4rem;
+  --spark-y: -10.5rem;
+}
+
+.exact-reward-sparks i:nth-child(9) {
+  --spark-index: 8;
+  --spark-x: -15rem;
+  --spark-y: -3rem;
+}
+
+.exact-reward-sparks i:nth-child(10) {
+  --spark-index: 9;
+  --spark-x: 15rem;
+  --spark-y: -2rem;
+}
+
+.exact-reward-sparks i:nth-child(11) {
+  --spark-index: 10;
+  --spark-x: -2rem;
+  --spark-y: 10rem;
+}
+
+.exact-reward-sparks i:nth-child(12) {
+  --spark-index: 11;
+  --spark-x: 2rem;
+  --spark-y: 10.5rem;
+}
+
+@keyframes exact-reward-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes exact-reward-aura {
+  0%,
+  100% {
+    opacity: 0.74;
+    transform: scale(0.96) rotate(0deg);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.04) rotate(8deg);
+  }
+}
+
+@keyframes exact-reward-card-in {
+  0% {
+    opacity: 0;
+    transform: translateY(1.5rem) scale(0.62) rotate(-4deg);
+  }
+
+  58% {
+    opacity: 1;
+    transform: translateY(-0.25rem) scale(1.05) rotate(1.2deg);
+  }
+
+  78% {
+    transform: translateY(0.08rem) scale(0.98) rotate(-0.4deg);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1) rotate(0deg);
+  }
+}
+
+@keyframes exact-reward-text-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.45rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes exact-reward-shine {
+  from {
+    opacity: 0;
+    transform: translateX(0) rotate(18deg);
+  }
+
+  18%,
+  74% {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+    transform: translateX(430%) rotate(18deg);
+  }
+}
+
+@keyframes exact-reward-spark {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.4);
+  }
+
+  22% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--spark-x)), calc(-50% + var(--spark-y))) scale(0.9);
+  }
 }
 
 @keyframes draw-card-reveal {
