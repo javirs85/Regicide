@@ -1,7 +1,7 @@
 import { createCastleDeck, createSoloJesterReserve, createTavernDeck, type Deck } from './decks';
 import { isRoyal, royalStats, type Card, type RoyalRank, type Suit } from './cards';
 
-const useFixedTestDeal = true;
+const useFixedTestDeal = false;
 const fixedTestDealSeed = 'regicide-debug-deal-2026-05-09';
 
 export type GameStatus = 'playing' | 'won' | 'lost';
